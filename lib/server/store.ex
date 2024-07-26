@@ -9,7 +9,7 @@ defmodule Server.Store do
     expiry = case ttl do
       nil -> nil
       ttl when is_integer(ttl) and ttl > 0 ->
-        :os.system_time(:second) + ttl
+        :os.system_time(:millisecond) + ttl
       _ ->
         nil
     end
