@@ -51,7 +51,7 @@ defmodule Server do
 
   defp handle_command(parsed_data, client) do
     case parsed_data do
-      [command | args] when is_list(command) ->
+      [command | args] ->
         execute_command(String.upcase(to_string(command)), args, client)
       _ ->
         write_line("-ERR Invalid command format\r\n", client)
@@ -59,7 +59,7 @@ defmodule Server do
   end
 
   defp execute_command("ECHO", [message], client) do
-    response = Server.Protocol.pack([message])
+    response = Server.Protocol.pack([to_string(message)])
     :gen_tcp.send(client, response)
   end
 
