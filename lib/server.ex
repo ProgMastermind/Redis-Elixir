@@ -61,7 +61,23 @@ defmodule Server do
   defp execute_command("ECHO", [message], client) do
     response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
     write_line(response, client)
-    # :gen_tcp.send(client, response)
+  end
+
+  defp execute_command("SET", [key | value], client) do
+    Server.Store.update(key, value)
+    write_line("+Ok\r\n", client)
+  end
+
+  defp execute_command("GET", [key], client) do
+    case Server.Store.get_value_or_false(key) do
+      {:ok, value} ->
+        response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+        write_line(response, client)
+
+      {:error, _reason} ->
+        response = Server.Protocol.pack("-1") |> IO.iodata_to_binary()
+        write_line(response, client)
+    end
   end
 
   defp execute_command("PING", [], client) do
@@ -75,4 +91,6 @@ defmodule Server do
   defp write_line(line, client) do
     :gen_tcp.send(client, line)
   end
+
+
 end

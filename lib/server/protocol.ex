@@ -36,7 +36,9 @@ defmodule Server.Protocol do
       "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$1\r\n1\r\n"
 
   """
-  @spec pack([binary]) :: iodata
+
+  @spec pack(binary | [binary]) :: iodata
+
   def pack(item) when not is_list(item) do
     item = to_string(item)
     [?$, Integer.to_string(byte_size(item)), @crlf_iodata, item, @crlf_iodata]
