@@ -13,13 +13,7 @@ defmodule Server do
   Listen for incoming connections
   """
   def listen() do
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
-    IO.puts("Logs from your program will appear here!")
-
-    # Uncomment this block to pass the first stage
-    #
-    # # Since the tester restarts your program quite often, setting SO_REUSEADDR
-    # # ensures that we don't run into 'Address already in use' errors
+    IO.puts("Server listening on port 6379")
     {:ok, socket} = :gen_tcp.listen(6379, [:binary, active: false, reuseaddr: true])
     loop_acceptor(socket)
   end
@@ -43,13 +37,38 @@ defmodule Server do
     data
   end
 
-  defp process_command(_command, client) do
-    response = "+PONG\r\n"
+  defp process_command(command, client) do
+    case Server.Protocol.parse(command) do
+      {:ok, parsed_data, _rest} ->
+        handle_command(parsed_data, client)
+      {:continuation, _fun} ->
+        write_line("-ERR Incomplete command\r\n", client)
+    end
+  end
+
+  defp handle_command(parsed_data, client) do
+    case parsed_data do
+      [command | args] when is_list(command) ->
+        execute_command(String.upcase(List.to_string(command)), args, client)
+      _ ->
+        write_line("-ERR Invalid command format\r\n", client)
+    end
+  end
+
+  defp execute_command("ECHO", [message], client) do
+    response = Server.Protocol.pack([message])
     write_line(response, client)
+  end
+
+  defp execute_command("PING", [], client) do
+    write_line("+PONG\r\n", client)
+  end
+
+  defp execute_command(command, _args, client) do
+    write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
 
   defp write_line(line, client) do
     :gen_tcp.send(client, line)
   end
-
 end
