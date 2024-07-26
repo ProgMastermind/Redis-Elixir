@@ -48,16 +48,16 @@ defmodule Server do
 
   defp handle_command(parsed_data, client) do
     case parsed_data do
-      [command | args] when is_list(command) ->
-        execute_command(String.upcase(List.to_string(command)), args, client)
+      [command | args]  ->
+        execute_command(String.upcase(to_string(command)), args, client)
       _ ->
         write_line("-ERR Invalid command format\r\n", client)
     end
   end
 
   defp execute_command("ECHO", [message], client) do
-    response = Server.Protocol.pack([message]) |> IO.iodata_to_binary()
-    write_line(response, client)
+    response = Server.Protocol.pack([message])
+    :gen_tcp.send(client, response)
   end
 
   defp execute_command("PING", [], client) do
