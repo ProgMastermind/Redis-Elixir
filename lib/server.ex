@@ -38,17 +38,20 @@ defmodule Server do
   end
 
   defp process_command(command, client) do
+    IO.puts("Received command: #{inspect(command)}")  # Debug line
     case Server.Protocol.parse(command) do
       {:ok, parsed_data, _rest} ->
+        IO.puts("Parsed data: #{inspect(parsed_data)}")  # Debug line
         handle_command(parsed_data, client)
       {:continuation, _fun} ->
+        IO.puts("Incomplete command")  # Debug line
         write_line("-ERR Incomplete command\r\n", client)
     end
   end
 
   defp handle_command(parsed_data, client) do
     case parsed_data do
-      [command | args]  ->
+      [command | args] when is_list(command) ->
         execute_command(String.upcase(to_string(command)), args, client)
       _ ->
         write_line("-ERR Invalid command format\r\n", client)
