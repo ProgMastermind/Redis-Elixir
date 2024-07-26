@@ -59,8 +59,9 @@ defmodule Server do
   end
 
   defp execute_command("ECHO", [message], client) do
-    response = Server.Protocol.pack(message)
-    :gen_tcp.send(client, response)
+    response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
+    write_line(response, client)
+    # :gen_tcp.send(client, response)
   end
 
   defp execute_command("PING", [], client) do
