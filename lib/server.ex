@@ -79,6 +79,22 @@ defmodule Server do
     end
   end
 
+  defp execute_command("SET", [key, value, command, time], client) do
+    command = String.upcase(to_string(command))
+    if command == "PX" do
+      try do
+        time_ms = String.to_integer(time)
+        Server.Store.update(key, value, time_ms)
+        write_line("+OK\r\n", client)
+      catch
+        _ ->
+          write_line("-ERR Internal server error\r\n", client)
+      end
+    else
+      write_line("-ERR Invalid SET command format\r\n", client)
+    end
+  end
+
   defp execute_command("GET", [key], client) do
     case Server.Store.get_value_or_false(key) do
       {:ok, value} ->

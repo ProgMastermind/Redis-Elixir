@@ -5,15 +5,29 @@ defmodule Server.Store do
     Agent.start_link(fn -> %{} end, name: __MODULE__)
   end
 
-  def update(key, value) do
-    Agent.update(__MODULE__, &Map.put(&1, key, value))
+  def update(key, value, ttl \\ nil) do
+    expiry = case ttl do
+      nil -> nil
+      ttl when is_integer(ttl) and ttl > 0 ->
+        :os.system_time(:second) + ttl
+      _ ->
+        nil
+    end
+    Agent.update(__MODULE__, &Map.put(&1, key, {value, expiry}))
   end
 
   def get_value_or_false(key) do
-    Agent.get(__MODULE__, fn map ->
-      case Map.fetch(map, key) do
-        {:ok, value} -> {:ok, value}
-        :error -> {:error, "key not found"}
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        nil -> {:error, :not_found}
+        {value, nil} -> {:ok, value}
+        {value, expiry} ->
+          if expiry > :os.system_time(:second) do
+            {:ok, value}
+          else
+            Agent.update(__MODULE__, &Map.delete(&1, key))
+            {:error, :not_found}
+          end
       end
     end)
   end
