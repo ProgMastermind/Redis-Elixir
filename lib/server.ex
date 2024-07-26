@@ -102,8 +102,7 @@ defmodule Server do
         write_line(response, client)
 
       {:error, _reason} ->
-        response = Server.Protocol.pack("-1") |> IO.iodata_to_binary()
-        write_line(response, client)
+        write_line("$-1\r\n", client)
     end
   end
 
