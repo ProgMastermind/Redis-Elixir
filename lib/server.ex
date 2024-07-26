@@ -63,9 +63,14 @@ defmodule Server do
     write_line(response, client)
   end
 
-  defp execute_command("SET", [key | value], client) do
-    Server.Store.update(key, value)
-    write_line("+Ok\r\n", client)
+  defp execute_command("SET", [key, value], client) do
+    try do
+      Server.Store.update(key, value)
+      write_line("+OK\r\n", client)
+    catch
+      _ ->
+        write_line("-ERR Internal server error\r\n", client)
+    end
   end
 
   defp execute_command("GET", [key], client) do
