@@ -56,7 +56,7 @@ defmodule Server do
   end
 
   defp execute_command("ECHO", [message], client) do
-    response = Server.Protocol.pack([message])
+    response = Server.Protocol.pack([message]) |> IO.iodata_to_binary()
     write_line(response, client)
   end
 
