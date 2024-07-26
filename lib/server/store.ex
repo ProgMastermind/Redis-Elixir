@@ -22,7 +22,7 @@ defmodule Server.Store do
         nil -> {:error, :not_found}
         {value, nil} -> {:ok, value}
         {value, expiry} ->
-          if expiry > :os.system_time(:second) do
+          if expiry > :os.system_time(:millisecond) do
             {:ok, value}
           else
             Agent.update(__MODULE__, &Map.delete(&1, key))
