@@ -37,6 +37,11 @@ defmodule Server.Protocol do
 
   """
   @spec pack([binary]) :: iodata
+  def pack(item) when not is_list(item) do
+    item = to_string(item)
+    [?$, Integer.to_string(byte_size(item)), @crlf_iodata, item, @crlf_iodata]
+  end
+
   def pack(items) when is_list(items) do
     pack(items, [], 0)
   end

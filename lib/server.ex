@@ -59,7 +59,7 @@ defmodule Server do
   end
 
   defp execute_command("ECHO", [message], client) do
-    response = Server.Protocol.pack([to_string(message)])
+    response = Server.Protocol.pack(message)
     :gen_tcp.send(client, response)
   end
 
