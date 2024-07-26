@@ -17,16 +17,16 @@ defmodule Server.Store do
   end
 
   def get_value_or_false(key) do
-    Agent.get(__MODULE__, fn state ->
+    Agent.get_and_update(__MODULE__, fn state ->
       case Map.get(state, key) do
-        nil -> {:error, :not_found}
-        {value, nil} -> {:ok, value}
+        nil -> {{:error, :not_found}, state}
+        {value, nil} -> {{:ok, value}, state}
         {value, expiry} ->
-          if expiry > :os.system_time(:millisecond) do
-            {:ok, value}
+          current_time = :os.system_time(:millisecond)
+          if expiry > current_time do
+            {{:ok, value}, state}
           else
-            Agent.update(__MODULE__, &Map.delete(&1, key))
-            {:error, :not_found}
+            {{:error, :expired}, Map.delete(state, key)}
           end
       end
     end)
