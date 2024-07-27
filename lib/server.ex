@@ -180,6 +180,13 @@ defmodule Server do
     write_line(packed_response, client)
   end
 
+  defp execute_command("REPLCONF", args, client) do
+    IO.puts("Received REPLCONF with args: #{inspect(args)}")
+
+    message = "+OK\r\n"
+    write_line(message, client)
+  end
+
   defp execute_command("PSYNC", [_, _], client) do
     response = "+FULLRESYNC <REPL_ID> 0\r\n"
     # response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
