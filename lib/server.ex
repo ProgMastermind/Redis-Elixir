@@ -6,21 +6,28 @@ defmodule Server do
   use Application
 
   def start(_type, _args) do
+    port = parse_port()
+
     children = [
       Server.Store,
-      {Task, fn-> Server.listen() end}
+      {Task, fn-> Server.listen(port) end}
     ]
 
     opts = [strategy: :one_for_one, name: :sup]
     Supervisor.start_link(children, opts)
   end
 
+  defp parse_port do
+    {opts, _, _} = OptionParser.parse(System.argv(), switches: [port: :integer])
+    opts[:port] || 6379
+  end
+
   @doc """
   Listen for incoming connections
   """
-  def listen() do
+  def listen(port) do
     IO.puts("Server listening on port 6379")
-    {:ok, socket} = :gen_tcp.listen(6379, [:binary, active: false, reuseaddr: true])
+    {:ok, socket} = :gen_tcp.listen(port, [:binary, active: false, reuseaddr: true])
     loop_acceptor(socket)
   end
 
