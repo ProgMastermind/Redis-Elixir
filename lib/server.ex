@@ -41,25 +41,25 @@ defmodule Server do
     {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
 
     if config.replica_of do
-      connect_to_master(config.replica_of)
+      connect_to_master(config.replica_of, config.port)
     end
 
     loop_acceptor(socket, config)
   end
 
-  defp connect_to_master({host, port}) do
-    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false]) do
+  defp connect_to_master({master_host, master_port}, replica_port) do
+    case :gen_tcp.connect(to_charlist(master_host), master_port, [:binary, active: false]) do
       {:ok, socket} ->
-        perfrom_handshake(socket, port)
+        perfrom_handshake(socket, replica_port)
       {:error, reason} ->
         IO.puts("Failed to connect to master: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
-  defp perfrom_handshake(socket, port) do
+  defp perfrom_handshake(socket, replica_port) do
     with :ok <- send_ping(socket),
-         :ok <- send_replconf_listening_port(socket, port),
+         :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket) do
       :ok
     else
