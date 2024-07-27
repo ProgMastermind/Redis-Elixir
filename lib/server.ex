@@ -6,43 +6,54 @@ defmodule Server do
   use Application
 
   def start(_type, _args) do
-    port = parse_port()
+    config = parse_args()
 
     children = [
       Server.Store,
-      {Task, fn-> Server.listen(port) end}
+      {Task, fn -> Server.listen(config) end}
     ]
 
     opts = [strategy: :one_for_one, name: :sup]
     Supervisor.start_link(children, opts)
   end
 
-  defp parse_port do
-    {opts, _, _} = OptionParser.parse(System.argv(), switches: [port: :integer])
-    opts[:port] || 6379
+  defp parse_args do
+    {opts, _, _} = OptionParser.parse(System.argv(),
+      switches: [port: :integer, replicaof: :string])
+
+    port = opts[:port] || 6379
+    replica_of = parse_replicaof(opts[:replicaof])
+
+    %{port: port, replica_of: replica_of}
+  end
+
+  defp parse_replicaof(nil), do: nil
+  defp parse_replicaof(replicaof) do
+    [host, port] = String.split(replicaof, " ")
+    {host, String.to_integer(port)}
   end
 
   @doc """
   Listen for incoming connections
   """
-  def listen(port) do
+  def listen(config) do
     IO.puts("Server listening on port 6379")
-    {:ok, socket} = :gen_tcp.listen(port, [:binary, active: false, reuseaddr: true])
-    loop_acceptor(socket)
+    {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
+    loop_acceptor(socket, config)
   end
 
-  defp loop_acceptor(socket) do
+  defp loop_acceptor(socket, config) do
     {:ok, client} = :gen_tcp.accept(socket)
-    spawn(fn -> serve(client) end)
-    loop_acceptor(socket)
+    spawn(fn -> serve(client, config) end)
+    loop_acceptor(socket, config)
   end
 
-  defp serve(client) do
+  defp serve(client, config) do
     client
     |> read_line()
-    |> process_command(client)
+    |> process_command(client, config)
 
-    serve(client)
+    serve(client, config)
   end
 
   defp read_line(client) do
@@ -50,35 +61,45 @@ defmodule Server do
     data
   end
 
-  defp process_command(command, client) do
+  defp process_command(command, client, config) do
     IO.puts("Received command: #{inspect(command)}")  # Debug line
     case Server.Protocol.parse(command) do
       {:ok, parsed_data, _rest} ->
         IO.puts("Parsed data: #{inspect(parsed_data)}")  # Debug line
-        handle_command(parsed_data, client)
+        handle_command(parsed_data, client, config)
       {:continuation, _fun} ->
         IO.puts("Incomplete command")  # Debug line
         write_line("-ERR Incomplete command\r\n", client)
     end
   end
 
-  defp handle_command(parsed_data, client) do
+  defp handle_command(parsed_data, client, config) do
     case parsed_data do
       [command | args] ->
-        execute_command(String.upcase(to_string(command)), args, client)
+        execute_command_with_config(String.upcase(to_string(command)), args, client, config)
       _ ->
         write_line("-ERR Invalid command format\r\n", client)
     end
   end
 
-  defp execute_command("INFO", args, client) do
-    case args do
-      ["replication"] ->
-        response = Server.Protocol.pack("role:master") |> IO.iodata_to_binary()
-        write_line(response, client)
+  defp execute_command_with_config(command, args, client, config) do
+    case command do
+      "INFO" when args == ["replication"] ->
+        handle_info_replication(client, config)
       _ ->
-        write_line("-ERR wrong number of arguments for 'INFO' command\r\n", client)
+        execute_command(command, args, client)
     end
+  end
+
+  defp handle_info_replication(client, config) do
+    response = case config.replica_of do
+      nil ->
+        "role:master"
+      {_, _} ->
+        "role:slave"
+    end
+    packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
+    write_line(packed_response, client)
   end
 
   defp execute_command("ECHO", [message], client) do
