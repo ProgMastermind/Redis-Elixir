@@ -60,7 +60,8 @@ defmodule Server do
   defp perfrom_handshake(socket, replica_port) do
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
-         :ok <- send_replconf_capa(socket) do
+         :ok <- send_replconf_capa(socket),
+         :ok <- send_psync(socket) do
       :ok
     else
       {:error, reason} ->
@@ -80,6 +81,10 @@ defmodule Server do
 
   defp send_replconf_capa(socket) do
     send_command(socket, ["REPLCONF", "capa", "psync2"], "+OK\r\n")
+  end
+
+  defp send_psync(socket) do
+    send_command(socket, ["PSYNC", "?", "-1"], "+FULLRESYNC <REPL_ID> 0\r\n")
   end
 
   defp send_command(socket, command, expected_response) do
@@ -106,6 +111,7 @@ defmodule Server do
     end
   end
 
+  # Master Server Code
   defp loop_acceptor(socket, config) do
     {:ok, client} = :gen_tcp.accept(socket)
     spawn(fn -> serve(client, config) end)
@@ -172,6 +178,12 @@ defmodule Server do
 
     packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
     write_line(packed_response, client)
+  end
+
+  defp execute_command("PSYNC", [_, _], client) do
+    response = "+FULLRESYNC <REPL_ID> 0\r\n"
+    # response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
+    write_line(response, client)
   end
 
   defp execute_command("ECHO", [message], client) do
