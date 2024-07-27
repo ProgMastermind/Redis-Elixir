@@ -95,18 +95,23 @@ defmodule Server do
     replication_id = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
     replication_offset = 0
 
-    response = case config.replica_of do
+    case config.replica_of do
       nil ->
+      response =
         [
           "role:master",
           "master_replid:#{replication_id}",
           "master_repl_offset:#{replication_offset}"
         ]
+        packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
+        write_line(packed_response, client)
+
       {_, _} ->
-        "role:slave"
+        response =
+          "role:slave"
+        packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
+        write_line(packed_response, client)
     end
-    packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
-    write_line(packed_response, client)
   end
 
   defp execute_command("ECHO", [message], client) do
