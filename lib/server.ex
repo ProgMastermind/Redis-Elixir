@@ -161,16 +161,22 @@ defmodule Server do
     end
   end
 
+  defp replication_id do
+    "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+  end
+
+  defp replication_offset do
+    0
+  end
+
   defp handle_info_replication(client, config) do
-    replication_id = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-    replication_offset = 0
 
     response = case config.replica_of do
       nil ->
         """
         role:master
-        master_replid:#{replication_id}
-        master_repl_offset:#{replication_offset}
+        master_replid:#{replication_id()}
+        master_repl_offset:#{replication_offset()}
         """
       {_, _} ->
         "role:slave"
@@ -188,7 +194,7 @@ defmodule Server do
   end
 
   defp execute_command("PSYNC", [_, _], client) do
-    response = "+FULLRESYNC <REPL_ID> 0\r\n"
+    response = "+FULLRESYNC #{replication_id()} #{replication_offset()}\r\n"
     # response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
     write_line(response, client)
   end
