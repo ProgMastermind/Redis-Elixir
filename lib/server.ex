@@ -92,9 +92,16 @@ defmodule Server do
   end
 
   defp handle_info_replication(client, config) do
+    replication_id = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+    replication_offset = 0
+
     response = case config.replica_of do
       nil ->
-        "role:master"
+        [
+          "role:master",
+          "master_replid:#{replication_id}",
+          "master_repl_offset:#{replication_offset}"
+        ]
       {_, _} ->
         "role:slave"
     end
