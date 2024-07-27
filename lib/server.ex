@@ -152,6 +152,19 @@ defmodule Server do
     end
   end
 
+  # Helpers
+  defp replication_id do
+    "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+  end
+
+  defp replication_offset do
+    0
+  end
+
+  defp empty_rdb_file do
+    Base.decode64!("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2")
+  end
+
   defp execute_command_with_config(command, args, client, config) do
     case command do
       "INFO" when args == ["replication"] ->
@@ -159,14 +172,6 @@ defmodule Server do
       _ ->
         execute_command(command, args, client)
     end
-  end
-
-  defp replication_id do
-    "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-  end
-
-  defp replication_offset do
-    0
   end
 
   defp handle_info_replication(client, config) do
@@ -193,10 +198,18 @@ defmodule Server do
     write_line(message, client)
   end
 
-  defp execute_command("PSYNC", [_, _], client) do
+
+  defp execute_command("PSYNC", _args, client) do
     response = "+FULLRESYNC #{replication_id()} #{replication_offset()}\r\n"
-    # response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
-    write_line(response, client)
+    :gen_tcp.send(client, response)
+    send_rdb_file(client)
+  end
+
+  defp send_rdb_file(client) do
+    rdb_content = empty_rdb_file()
+    length = byte_size(rdb_content)
+    header = "$#{length}\r\n"
+    :gen_tcp.send(client, [header, rdb_content])
   end
 
   defp execute_command("ECHO", [message], client) do
