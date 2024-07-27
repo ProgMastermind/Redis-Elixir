@@ -97,14 +97,14 @@ defmodule Server do
 
     case config.replica_of do
       nil ->
-      response =
-        [
-          "role:master",
-          "master_replid:#{replication_id}",
-          "master_repl_offset:#{replication_offset}"
-        ]
-        packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
-        write_line(packed_response, client)
+        response =
+          """
+            "role:master",
+            "master_replid:#{replication_id}",
+            "master_repl_offset:#{replication_offset}"
+          """
+          packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
+          write_line(packed_response, client)
 
       {_, _} ->
         response =
