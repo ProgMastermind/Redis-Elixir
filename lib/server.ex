@@ -48,13 +48,62 @@ defmodule Server do
   end
 
   defp connect_to_master({host, port}) do
-    {:ok, socket} = :gen_tcp.connect(to_charlist(host), port, [:binary, active: false])
-    send_ping(socket)
+    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false]) do
+      {:ok, socket} ->
+        perfrom_handshake(socket, port)
+      {:error, reason} ->
+        IO.puts("Failed to connect to master: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp perfrom_handshake(socket, port) do
+    with :ok <- send_ping(socket),
+         :ok <- send_replconf_listening_port(socket, port),
+         :ok <- send_replconf_capa(socket) do
+      :ok
+    else
+      {:error, reason} ->
+        IO.puts("Handshake failed: #{inspect(reason)}")
+        :gen_tcp.close(socket)
+        {:error, reason}
+    end
   end
 
   defp send_ping(socket) do
-    ping_command = Server.Protocol.pack(["PING"]) |> IO.iodata_to_binary()
-    :ok = :gen_tcp.send(socket, ping_command)
+    send_command(socket, ["PING"], "+PONG\r\n")
+  end
+
+  defp send_replconf_listening_port(socket, port) do
+    send_command(socket, ["REPLCONF", "listening-port", to_string(port)], "+OK\r\n")
+  end
+
+  defp send_replconf_capa(socket) do
+    send_command(socket, ["REPLCONF", "capa", "psync2"], "+OK\r\n")
+  end
+
+  defp send_command(socket, command, expected_response) do
+    packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+    case :gen_tcp.send(socket, packed_command) do
+      :ok ->
+        receive_response(socket, expected_response)
+      {:error, reason} ->
+        IO.puts("Failed to send command: #{inspect(command)}")
+        {:error, reason}
+    end
+  end
+
+  defp receive_response(socket, expected_response) do
+    case :gen_tcp.recv(socket, 0, 5000) do
+      {:ok, ^expected_response} ->
+        :ok
+      {:ok, response} ->
+        IO.puts("Unexpected response: #{inspect(response)}")
+        {:error, :unexpected_response}
+      {:error, reason} ->
+        IO.puts("Error receiving response: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   defp loop_acceptor(socket, config) do
