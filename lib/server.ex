@@ -74,7 +74,7 @@ defmodule Server do
   defp execute_command("INFO", args, client) do
     case args do
       ["replication"] ->
-        response = "role:master"
+        response = Server.Protocol.pack("role:master") |> IO.iodata_to_binary()
         write_line(response, client)
       _ ->
         write_line("-ERR wrong number of arguments for 'INFO' command\r\n", client)
