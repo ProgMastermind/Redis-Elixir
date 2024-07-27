@@ -2,6 +2,7 @@ defmodule Server do
   @moduledoc """
   Your implementation of a Redis server
   """
+require Logger
 
   use Application
 
@@ -200,17 +201,32 @@ defmodule Server do
 
 
   defp execute_command("PSYNC", _args, client) do
-    response = "+FULLRESYNC #{replication_id()} #{replication_offset()}\r\n"
-    :gen_tcp.send(client, response)
-    send_rdb_file(client)
+    try do
+      response = "+FULLRESYNC #{replication_id()} #{replication_offset()}\r\n"
+      :ok = :gen_tcp.send(client, response)
+      send_rdb_file(client)
+    catch
+      :error, :closed ->
+        Logger.warning("Connection closed while executing PSYNC")
+      error ->
+        Logger.error("Error executing PSYNC: #{inspect(error)}")
+    end
   end
 
   defp send_rdb_file(client) do
-    rdb_content = empty_rdb_file()
-    length = byte_size(rdb_content)
-    header = "$#{length}\r\n"
-    :gen_tcp.send(client, [header, rdb_content])
+    try do
+      rdb_content = empty_rdb_file()
+      length = byte_size(rdb_content)
+      header = "$#{length}\r\n"
+      :ok = :gen_tcp.send(client, [header, rdb_content])
+    catch
+      :error, :closed ->
+        Logger.warning("Connection closed while sending RDB file")
+      error ->
+        Logger.error("Error sending RDB file: #{inspect(error)}")
+    end
   end
+
 
   defp execute_command("ECHO", [message], client) do
     response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
