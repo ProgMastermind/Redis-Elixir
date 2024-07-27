@@ -39,7 +39,22 @@ defmodule Server do
   def listen(config) do
     IO.puts("Server listening on port 6379")
     {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
+
+    if config.replica_of do
+      connect_to_master(config.replica_of)
+    end
+
     loop_acceptor(socket, config)
+  end
+
+  defp connect_to_master({host, port}) do
+    {:ok, socket} = :gen_tcp.connect(to_charlist(host), port, [:binary, active: false])
+    send_ping(socket)
+  end
+
+  defp send_ping(socket) do
+    ping_command = Server.Protocol.pack(["PING"]) |> IO.iodata_to_binary()
+    :ok = :gen_tcp.send(socket, ping_command)
   end
 
   defp loop_acceptor(socket, config) do
