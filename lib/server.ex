@@ -54,7 +54,6 @@ require Logger
   defp connect_to_master({master_host, master_port}, replica_port) do
     case :gen_tcp.connect(to_charlist(master_host), master_port, [:binary, active: false]) do
       {:ok, socket} ->
-        Replicationstate.set_replica_socket(socket)
         perfrom_handshake(socket, replica_port)
       {:error, reason} ->
         IO.puts("Failed to connect to master: #{inspect(reason)}")
@@ -67,6 +66,7 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
+          Replicationstate.set_replica_socket(socket)
       :ok
     else
       {:error, reason} ->
