@@ -132,7 +132,7 @@ require Logger
       |> read_line()
       |> process_command(client, config)
 
-      send_buffered_commands_to_replica()
+      # send_buffered_commands_to_replica()
       serve(client, config)
     catch
       kind, reason ->
