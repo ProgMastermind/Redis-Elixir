@@ -2,6 +2,7 @@ defmodule Server do
   @moduledoc """
   Your implementation of a Redis server
   """
+  alias Server.Replicationstate
 require Logger
 
   use Application
@@ -11,6 +12,7 @@ require Logger
 
     children = [
       Server.Store,
+      Server.Replicationstate,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -51,6 +53,7 @@ require Logger
   defp connect_to_master({master_host, master_port}, replica_port) do
     case :gen_tcp.connect(to_charlist(master_host), master_port, [:binary, active: false]) do
       {:ok, socket} ->
+        Replicationstate.set_replica_socket(socket)
         perfrom_handshake(socket, replica_port)
       {:error, reason} ->
         IO.puts("Failed to connect to master: #{inspect(reason)}")
@@ -153,6 +156,7 @@ require Logger
     end
   end
 
+  # ---------------------------------------------------------------
   # Helpers
   defp replication_id do
     "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
@@ -168,6 +172,18 @@ require Logger
     IO.puts("RDB file header: #{inspect(binary_part(content, 0, 9))}")
     content
   end
+
+  defp propagate_to_replica(command) do
+    case Server.Replicationstate.get_replica_socket() do
+      nil ->
+        :ok  # No replica connected
+      socket ->
+        packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+        :gen_tcp.send(socket, packed_command)
+    end
+  end
+
+  # -------------------------------------------------------------------
 
   defp execute_command_with_config(command, args, client, config) do
     case command do
@@ -240,6 +256,7 @@ require Logger
     try do
       Server.Store.update(key, value)
       write_line("+OK\r\n", client)
+      propagate_to_replica(["SET", key, value])
     catch
       _ ->
         write_line("-ERR Internal server error\r\n", client)
@@ -253,6 +270,7 @@ require Logger
         time_ms = String.to_integer(time)
         Server.Store.update(key, value, time_ms)
         write_line("+OK\r\n", client)
+        propagate_to_replica(["SET", key, value, command, time])
       catch
         _ ->
           write_line("-ERR Internal server error\r\n", client)
