@@ -184,12 +184,18 @@ require Logger
 
   defp propagate_buffered_commands do
     commands = Server.Commandbuffer.get_and_clear_commands()
+    IO.puts("Commands to propagate: #{inspect(commands)}")
     case Server.Replicationstate.get_replica_socket() do
       nil ->
+        IO.puts("No replica socket found")
         :ok  # No replica connected
       socket ->
         packed_commands = Enum.map(commands, &Server.Protocol.pack/1)
-        :gen_tcp.send(socket, packed_commands)
+        IO.puts("Packed commands: #{inspect(packed_commands)}")
+        case :gen_tcp.send(socket, packed_commands) do
+          :ok -> IO.puts("Commands sent successfully")
+          {:error, reason} -> IO.puts("Error sending commands: #{inspect(reason)}")
+        end
     end
   end
   # -------------------------------------------------------------------
