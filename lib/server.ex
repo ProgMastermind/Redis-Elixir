@@ -40,7 +40,7 @@ require Logger
   Listen for incoming connections
   """
   def listen(config) do
-    IO.puts("Server listening on port", config.port)
+    IO.puts("Server listening on port #{config.port}")
     {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
 
     if config.replica_of do
@@ -53,8 +53,6 @@ require Logger
   defp connect_to_master({master_host, master_port}, replica_port) do
     case :gen_tcp.connect(to_charlist(master_host), master_port, [:binary, active: false]) do
       {:ok, socket} ->
-        IO.puts("Handshake successful, setting replica socket")
-        Server.Replicationstate.set_replica_socket(socket)
         perfrom_handshake(socket, replica_port)
       {:error, reason} ->
         IO.puts("Failed to connect to master: #{inspect(reason)}")
