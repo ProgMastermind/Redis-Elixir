@@ -65,7 +65,8 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-         Server.Replicationstate.set_replica_socket(socket)
+          IO.puts("Handshake successful, setting replica socket")
+          Server.Replicationstate.set_replica_socket(socket)
       :ok
     else
       {:error, reason} ->
