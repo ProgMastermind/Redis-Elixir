@@ -5,7 +5,7 @@ defmodule Server.Replicationstate do
     GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   end
 
-  def init(_args \\ []) do
+  def init(_args) do
     {:ok, %{replica_socket: nil}}
   end
 
