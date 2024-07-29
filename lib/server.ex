@@ -65,6 +65,7 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
+         Server.Replicationstate.set_replica_socket(socket)
       :ok
     else
       {:error, reason} ->
@@ -186,18 +187,14 @@ require Logger
   end
 
 
-  defp send_buffered_commands_to_replica do
-    commands = Server.Commandbuffer.get_and_clear_commands()
-    IO.puts("commands: ", commands)
+  defp propagate_command(command) do
     case Server.Replicationstate.get_replica_socket() do
       nil ->
-        IO.puts("NO replica found")
+        IO.puts("no socket connection")
         :ok  # No replica connected
       socket ->
-        Enum.each(commands, fn command ->
-          packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
-          :gen_tcp.send(socket, packed_command)
-        end)
+        packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+        :gen_tcp.send(socket, packed_command)
     end
   end
   # -------------------------------------------------------------------
@@ -270,7 +267,7 @@ require Logger
     write_line(response, client)
   end
 
-  defp execute_command("SET", [key, value | rest], client) do
+  defp execute_command("SET", [key, value | rest] = command, client) do
     try do
       case rest do
         ["PX", time] ->
@@ -281,7 +278,7 @@ require Logger
       end
 
       write_line("+OK\r\n", client)
-      Server.Commandbuffer.add_command(["SET", key, value | rest])
+      propagate_command(command)
       :ok
     catch
       _ ->
