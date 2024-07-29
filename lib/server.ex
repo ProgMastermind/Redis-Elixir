@@ -124,17 +124,18 @@ require Logger
   end
 
   defp serve(client, config) do
-    client
-    |> read_line()
-    |> process_command(client, config)
-
-    propagate_buffered_commands()
-    serve(client, config)
+    case read_line(client) do
+      {:ok, data} ->
+        process_command(data, client, config)
+        serve(client, config)
+      {:error, :closed} ->
+        propagate_buffered_commands()
+        :ok
+    end
   end
 
   defp read_line(client) do
-    {:ok, data} = :gen_tcp.recv(client, 0)
-    data
+    :gen_tcp.recv(client, 0)
   end
 
   defp process_command(command, client, config) do
@@ -175,19 +176,17 @@ require Logger
     content
   end
 
+
   defp propagate_buffered_commands do
     commands = Server.Commandbuffer.get_and_clear_commands()
     case Server.Replicationstate.get_replica_socket() do
       nil ->
         :ok  # No replica connected
       socket ->
-        Enum.each(commands, fn command ->
-          packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
-          :gen_tcp.send(socket, packed_command)
-        end)
+        packed_commands = Enum.map(commands, &Server.Protocol.pack/1)
+        :gen_tcp.send(socket, packed_commands)
     end
   end
-
   # -------------------------------------------------------------------
 
   defp execute_command_with_config(command, args, client, config) do
@@ -275,7 +274,7 @@ require Logger
         time_ms = String.to_integer(time)
         Server.Store.update(key, value, time_ms)
         write_line("+OK\r\n", client)
-        Server.Commandbuffer.add_command(["SET", key, value, command, time])
+        Server.Commandbuffer.add_command(["SET", key, value, "PX", time])
       catch
         _ ->
           write_line("-ERR Internal server error\r\n", client)
