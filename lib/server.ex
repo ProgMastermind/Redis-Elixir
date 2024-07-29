@@ -188,8 +188,10 @@ require Logger
 
   defp send_buffered_commands_to_replica do
     commands = Server.Commandbuffer.get_and_clear_commands()
+    IO.puts(commands)
     case Server.Replicationstate.get_replica_socket() do
       nil ->
+        IO.puts("No socket found")
         :ok  # No replica connected
       socket ->
         Enum.each(commands, fn command ->
