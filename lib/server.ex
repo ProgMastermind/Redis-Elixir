@@ -256,7 +256,6 @@ require Logger
       length = byte_size(rdb_content)
       header = "$#{length}\r\n"
       :ok = :gen_tcp.send(client, [header, rdb_content])
-      send_buffered_commands_to_replica()
     catch
       :error, :closed ->
         Logger.warning("Connection closed while sending RDB file")
@@ -283,6 +282,8 @@ require Logger
 
       write_line("+OK\r\n", client)
       Server.Commandbuffer.add_command(["SET", key, value | rest])
+
+      send_buffered_commands_to_replica()
       :ok
     catch
       _ ->
