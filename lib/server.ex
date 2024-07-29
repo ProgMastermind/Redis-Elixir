@@ -65,8 +65,7 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-         Server.Replicationstate.set_replica_socket(socket)
-         Server.Replicationstate.set_handshake_complete()
+         send_buffered_commands_to_replica()
       :ok
     else
       {:error, reason} ->
@@ -124,23 +123,16 @@ require Logger
   end
 
   defp serve(client, config) do
-    case read_line(client) do
-      {:ok, data} ->
-        process_command(data, client, config)
-        propagate_command_batch()
-        serve(client, config)
-      {:error, :closed} ->
-        propagate_command_batch()
-        :ok
-    end
+      client
+      |> read_line
+      |> process_command(client, config)
+
+      serve(client, config)
   end
 
   defp read_line(client) do
-    case :gen_tcp.recv(client, 0) do
-      {:ok, data} -> {:ok, data}
-      {:error, :closed} = error -> error
-      {:error, _reason} = error -> error
-    end
+    {:ok, data} = :gen_tcp.recv(client, 0)
+    data
   end
 
   defp process_command(command, client, config) do
@@ -182,24 +174,17 @@ require Logger
   end
 
 
-  defp propagate_command_batch do
-    if Server.Replicationstate.handshake_complete?() do
-      batch = Server.Commandbuffer.get_and_clear_commands()
-      case Server.Replicationstate.get_replica_socket() do
-        nil -> IO.puts("No replica socket found")
-        socket ->
-          Enum.each(batch, fn command ->
-            packed_command = Server.Protocol.pack(command)
-            case :gen_tcp.send(socket, packed_command) do
-              :ok -> IO.puts("Command propagated successfully")
-              {:error, reason} -> IO.puts("Error propagating command: #{inspect(reason)}")
-            end
-          end)
-      end
-    else
-      IO.puts("Handshake is not complete")
+  defp send_buffered_commands_to_replica do
+    commands = Server.Commandbuffer.get_and_clear_commands()
+    case Server.Replicationstate.get_replica_socket() do
+      nil ->
+        :ok  # No replica connected
+      socket ->
+        Enum.each(commands, fn command ->
+          packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+          :gen_tcp.send(socket, packed_command)
+        end)
     end
-
   end
   # -------------------------------------------------------------------
 
@@ -270,31 +255,22 @@ require Logger
     write_line(response, client)
   end
 
-  defp execute_command("SET", [key, value], client) do
+  defp execute_command("SET", [key, value | rest], client) do
     try do
-      Server.Store.update(key, value)
+      case rest do
+        ["PX", time] ->
+          time_ms = String.to_integer(time)
+          Server.Store.update(key, value, time_ms)
+        [] ->
+          Server.Store.update(key, value)
+      end
+
       write_line("+OK\r\n", client)
-      Server.Commandbuffer.add_command(["SET", key, value])
+      Server.Commandbuffer.add_command(["SET", key, value | rest])
+      :ok
     catch
       _ ->
         write_line("-ERR Internal server error\r\n", client)
-    end
-  end
-
-  defp execute_command("SET", [key, value, command, time], client) do
-    command = String.upcase(to_string(command))
-    if command == "PX" do
-      try do
-        time_ms = String.to_integer(time)
-        Server.Store.update(key, value, time_ms)
-        write_line("+OK\r\n", client)
-        Server.Commandbuffer.add_command(["SET", key, value, "PX", time])
-      catch
-        _ ->
-          write_line("-ERR Internal server error\r\n", client)
-      end
-    else
-      write_line("-ERR Invalid SET command format\r\n", client)
     end
   end
 
