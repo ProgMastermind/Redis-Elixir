@@ -273,9 +273,12 @@ require Logger
   defp execute_command("SET", [key, value | rest], client) do
     try do
       case rest do
-        ["PX", time] ->
-          time_ms = String.to_integer(time)
-          Server.Store.update(key, value, time_ms)
+        [command, time] ->
+          command = String.upcase(to_string(command))
+          if command == "PX" do
+            time_ms = String.to_integer(time)
+            Server.Store.update(key, value, time_ms)
+          end
         [] ->
           Server.Store.update(key, value)
       end
