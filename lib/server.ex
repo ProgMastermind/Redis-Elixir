@@ -118,24 +118,13 @@ require Logger
   defp loop_acceptor(socket, config) do
     case :gen_tcp.accept(socket) do
       {:ok, client} ->
-        spawn(fn -> handle_connection(client, config) end)
+        spawn(fn -> serve(client, config) end)
         loop_acceptor(socket, config)
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp handle_connection(client, config) do
-    case read_line(client) do
-      {:ok, data} ->
-        case Server.Protocol.parse(data) do
-          {:ok, ["PING"], _} -> handle_replica_connection(client, config)
-          _ -> serve(client, config)
-        end
-      {:error, reason} ->
-        IO.puts("Error reading from client: #{inspect(reason)}")
-    end
-  end
 
   defp serve(client, config) do
     try do
@@ -143,6 +132,7 @@ require Logger
       |> read_line()
       |> process_command(client, config)
 
+      # send_buffered_commands_to_replica()
       serve(client, config)
     catch
       kind, reason ->
@@ -178,48 +168,6 @@ require Logger
     end
   end
 
-  #------------------------------------------------------------
-  # handling replica directly
-  defp handle_replica_connection(client, config) do
-    with :ok <- handle_ping(client, config),
-         :ok <- handle_replconf(client),
-         :ok <- handle_psync(client) do
-      Server.Replicationstate.set_replica_socket(client)
-      serve(client, config)
-    else
-      {:error, reason} ->
-        IO.puts("Replica handshake failed: #{inspect(reason)}")
-        :gen_tcp.close(client)
-    end
-  end
-
-  defp handle_ping(client, config) do
-    write_line("+PONG\r\n", client)
-    read_and_expect(client, ["REPLCONF", "listening-port", to_string(config.port)])
-  end
-
-  defp handle_replconf(client) do
-    write_line("+OK\r\n", client)
-    read_and_expect(client, ["REPLCONF", "capa", "eof", "capa", "psync2"])
-  end
-
-  defp handle_psync(client) do
-    write_line("+FULLRESYNC #{replication_id()} 0\r\n", client)
-    send_rdb_file(client)
-  end
-
-  defp read_and_expect(client, expected_command) do
-    case read_line(client) do
-      {:ok, data} ->
-        case Server.Protocol.parse(data) do
-          {:ok, ^expected_command, _} -> :ok
-          _ -> {:error, :unexpected_command}
-        end
-      {:error, reason} -> {:error, reason}
-    end
-  end
-  #----------------------------------------------------------------
-
   # ---------------------------------------------------------------
   # Helpers
   defp replication_id do
@@ -238,14 +186,16 @@ require Logger
   end
 
 
-  defp propagate_command(command) do
+  defp send_buffered_commands_to_replica do
+    commands = Server.Commandbuffer.get_and_clear_commands()
     case Server.Replicationstate.get_replica_socket() do
       nil ->
-        IO.puts("No replica connected")
-        :ok
+        :ok  # No replica connected
       socket ->
-        packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
-        :gen_tcp.send(socket, packed_command)
+        Enum.each(commands, fn command ->
+          packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+          :gen_tcp.send(socket, packed_command)
+        end)
     end
   end
   # -------------------------------------------------------------------
@@ -288,6 +238,7 @@ require Logger
     try do
       response = "+FULLRESYNC #{replication_id()} #{replication_offset()}\r\n"
       :ok = :gen_tcp.send(client, response)
+      Server.Replicationstate.set_replica_socket(client)
       send_rdb_file(client)
     catch
       :error, :closed ->
@@ -303,7 +254,7 @@ require Logger
       length = byte_size(rdb_content)
       header = "$#{length}\r\n"
       :ok = :gen_tcp.send(client, [header, rdb_content])
-
+      send_buffered_commands_to_replica()
     catch
       :error, :closed ->
         Logger.warning("Connection closed while sending RDB file")
@@ -318,7 +269,7 @@ require Logger
     write_line(response, client)
   end
 
-  defp execute_command("SET", [key, value | rest] = command, client) do
+  defp execute_command("SET", [key, value | rest], client) do
     try do
       case rest do
         ["PX", time] ->
@@ -329,7 +280,7 @@ require Logger
       end
 
       write_line("+OK\r\n", client)
-      propagate_command(command)
+      Server.Commandbuffer.add_command(["SET", key, value | rest])
       :ok
     catch
       _ ->
