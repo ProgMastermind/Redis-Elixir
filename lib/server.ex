@@ -65,7 +65,6 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-
       :ok
     else
       {:error, reason} ->
@@ -117,23 +116,35 @@ require Logger
 
   # Master Server Code
   defp loop_acceptor(socket, config) do
-    {:ok, client} = :gen_tcp.accept(socket)
-    spawn(fn -> serve(client, config) end)
-    loop_acceptor(socket, config)
+    case :gen_tcp.accept(socket) do
+      {:ok, client} ->
+        spawn(fn -> serve(client, config) end)
+        loop_acceptor(socket, config)
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
-  defp serve(client, config) do
-      client
-      |> read_line
-      |> process_command(client, config)
-      send_buffered_commands_to_replica()
 
+  defp serve(client, config) do
+    try do
+      client
+      |> read_line()
+      |> process_command(client, config)
+
+      send_buffered_commands_to_replica()
       serve(client, config)
+    catch
+      kind, reason ->
+        {:error, {kind, reason, __STACKTRACE__}}
+    end
   end
 
   defp read_line(client) do
-    {:ok, data} = :gen_tcp.recv(client, 0)
-    data
+    case :gen_tcp.recv(client, 0) do
+      {:ok, data} -> data
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp process_command(command, client, config) do
