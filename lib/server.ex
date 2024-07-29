@@ -184,7 +184,7 @@ require Logger
 
   defp propagate_command_batch do
     if Server.Replicationstate.handshake_complete?() do
-      batch = Server.CommandBatch.get_and_clear_batch()
+      batch = Server.Commandbuffer.get_and_clear_commands()
       case Server.Replicationstate.get_replica_socket() do
         nil -> IO.puts("No replica socket found")
         socket ->
