@@ -13,6 +13,7 @@ require Logger
     children = [
       Server.Store,
       Server.Replicationstate,
+      Server.Commandbuffer,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -127,6 +128,7 @@ require Logger
     |> read_line()
     |> process_command(client, config)
 
+    propagate_buffered_commands()
     serve(client, config)
   end
 
@@ -173,13 +175,16 @@ require Logger
     content
   end
 
-  defp propagate_to_replica(command) do
+  defp propagate_buffered_commands do
+    commands = Server.Commandbuffer.get_and_clear_commands()
     case Server.Replicationstate.get_replica_socket() do
       nil ->
         :ok  # No replica connected
       socket ->
-        packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
-        :gen_tcp.send(socket, packed_command)
+        Enum.each(commands, fn command ->
+          packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+          :gen_tcp.send(socket, packed_command)
+        end)
     end
   end
 
@@ -256,7 +261,7 @@ require Logger
     try do
       Server.Store.update(key, value)
       write_line("+OK\r\n", client)
-      propagate_to_replica(["SET", key, value])
+      Server.Commandbuffer.add_command(["SET", key, value])
     catch
       _ ->
         write_line("-ERR Internal server error\r\n", client)
@@ -270,7 +275,7 @@ require Logger
         time_ms = String.to_integer(time)
         Server.Store.update(key, value, time_ms)
         write_line("+OK\r\n", client)
-        propagate_to_replica(["SET", key, value, command, time])
+        Server.Commandbuffer.add_command(["SET", key, value, command, time])
       catch
         _ ->
           write_line("-ERR Internal server error\r\n", client)
