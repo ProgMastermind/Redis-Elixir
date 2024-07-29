@@ -127,6 +127,7 @@ require Logger
     case read_line(client) do
       {:ok, data} ->
         process_command(data, client, config)
+        propagate_buffered_commands()
         serve(client, config)
       {:error, :closed} ->
         propagate_buffered_commands()
