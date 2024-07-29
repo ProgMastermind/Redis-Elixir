@@ -40,7 +40,7 @@ require Logger
   Listen for incoming connections
   """
   def listen(config) do
-    IO.puts("Server listening on port 6379")
+    IO.puts("Server listening on port", config.port)
     {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
 
     if config.replica_of do
