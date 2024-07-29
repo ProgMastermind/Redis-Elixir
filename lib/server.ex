@@ -188,7 +188,7 @@ require Logger
 
   defp send_buffered_commands_to_replica do
     commands = Server.Commandbuffer.get_and_clear_commands()
-    IO.puts("Expected Propogated Commands: ", commands)
+    IO.puts("Expected Propogated Commands: #{commands}")
     case Server.Replicationstate.get_replica_socket() do
       nil ->
         IO.puts("No socket found")
