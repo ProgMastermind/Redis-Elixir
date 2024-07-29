@@ -135,7 +135,11 @@ require Logger
   end
 
   defp read_line(client) do
-    :gen_tcp.recv(client, 0)
+    case :gen_tcp.recv(client, 0) do
+      {:ok, data} -> {:ok, data}
+      {:error, :closed} = error -> error
+      {:error, _reason} = error -> error
+    end
   end
 
   defp process_command(command, client, config) do
