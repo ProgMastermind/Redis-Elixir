@@ -65,7 +65,7 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-         send_buffered_commands_to_replica()
+
       :ok
     else
       {:error, reason} ->
@@ -178,6 +178,7 @@ require Logger
     commands = Server.Commandbuffer.get_and_clear_commands()
     case Server.Replicationstate.get_replica_socket() do
       nil ->
+        IO.puts("NO replica found")
         :ok  # No replica connected
       socket ->
         Enum.each(commands, fn command ->
@@ -241,6 +242,7 @@ require Logger
       length = byte_size(rdb_content)
       header = "$#{length}\r\n"
       :ok = :gen_tcp.send(client, [header, rdb_content])
+      send_buffered_commands_to_replica()
     catch
       :error, :closed ->
         Logger.warning("Connection closed while sending RDB file")

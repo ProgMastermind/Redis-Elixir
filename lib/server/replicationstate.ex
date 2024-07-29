@@ -1,7 +1,7 @@
 defmodule Server.Replicationstate do
   use Agent
 
-  def start_link(_) do
+  def start_link(_ \\ []) do
     Agent.start_link(fn -> %{socket: nil, handshake_complete: false} end, name: __MODULE__)
   end
 
