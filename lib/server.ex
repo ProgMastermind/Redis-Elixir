@@ -2,7 +2,6 @@ defmodule Server do
   @moduledoc """
   Your implementation of a Redis server
   """
-  alias Server.Replicationstate
 require Logger
 
   use Application
@@ -66,7 +65,8 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-          Replicationstate.set_replica_socket(socket)
+         Server.Replicationstate.set_replica_socket(socket)
+         Server.Replicationstate.set_handshake_complete()
       :ok
     else
       {:error, reason} ->
@@ -127,10 +127,10 @@ require Logger
     case read_line(client) do
       {:ok, data} ->
         process_command(data, client, config)
-        propagate_buffered_commands()
+        propagate_command_batch()
         serve(client, config)
       {:error, :closed} ->
-        propagate_buffered_commands()
+        propagate_command_batch()
         :ok
     end
   end
@@ -182,20 +182,20 @@ require Logger
   end
 
 
-  defp propagate_buffered_commands do
-    commands = Server.Commandbuffer.get_and_clear_commands()
-    IO.puts("Commands to propagate: #{inspect(commands)}")
-    case Server.Replicationstate.get_replica_socket() do
-      nil ->
-        IO.puts("No replica socket found")
-        :ok  # No replica connected
-      socket ->
-        packed_commands = Enum.map(commands, &Server.Protocol.pack/1)
-        IO.puts("Packed commands: #{inspect(packed_commands)}")
-        case :gen_tcp.send(socket, packed_commands) do
-          :ok -> IO.puts("Commands sent successfully")
-          {:error, reason} -> IO.puts("Error sending commands: #{inspect(reason)}")
-        end
+  defp propagate_command_batch do
+    if Server.Replicationstate.handshake_complete?() do
+      batch = Server.CommandBatch.get_and_clear_batch()
+      case Server.Replicationstate.get_replica_socket() do
+        nil -> IO.puts("No replica socket found")
+        socket ->
+          Enum.each(batch, fn command ->
+            packed_command = Server.Protocol.pack(command)
+            case :gen_tcp.send(socket, packed_command) do
+              :ok -> IO.puts("Command propagated successfully")
+              {:error, reason} -> IO.puts("Error propagating command: #{inspect(reason)}")
+            end
+          end)
+      end
     end
   end
   # -------------------------------------------------------------------

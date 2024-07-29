@@ -1,27 +1,23 @@
 defmodule Server.Replicationstate do
-  use GenServer
+  use Agent
 
   def start_link(_) do
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
-  end
-
-  def init(_args) do
-    {:ok, %{replica_socket: nil}}
+    Agent.start_link(fn -> %{socket: nil, handshake_complete: false} end, name: __MODULE__)
   end
 
   def set_replica_socket(socket) do
-    GenServer.call(__MODULE__, {:set_socket, socket})
+    Agent.update(__MODULE__, fn state -> %{state | socket: socket} end)
   end
 
   def get_replica_socket do
-    GenServer.call(__MODULE__, :get_socket)
+    Agent.get(__MODULE__, fn state -> state.socket end)
   end
 
-  def handle_call({:set_socket, socket}, _from, state) do
-    {:reply, :ok, %{state | replica_socket: socket}}
+  def set_handshake_complete do
+    Agent.update(__MODULE__, fn state -> %{state | handshake_complete: true} end)
   end
 
-  def handle_call(:get_socket, _from, state) do
-    {:reply, state.replica_socket, state}
+  def handshake_complete? do
+    Agent.get(__MODULE__, fn state -> state.handshake_complete end)
   end
 end
