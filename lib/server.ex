@@ -196,7 +196,10 @@ require Logger
             end
           end)
       end
+    else
+      IO.puts("Handshake is not complete")
     end
+
   end
   # -------------------------------------------------------------------
 
