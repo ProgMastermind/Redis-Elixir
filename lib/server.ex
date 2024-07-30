@@ -59,9 +59,9 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            # spawn(fn -> listen_for_master_commands(socket) end)
-            # listen_for_master_commands(socket)
-            # {:ok, socket}
+            :inet.setopts(socket, [active: true])
+            spawn_link(fn -> listen_for_master_commands(socket) end)
+          {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
             {:error, reason}
@@ -80,8 +80,6 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-      :inet.setopts(socket, [active: true])
-      spawn(fn -> listen_for_master_commands(socket) end)
       :ok
     else
       {:error, reason} ->
@@ -157,38 +155,42 @@ require Logger
   defp listen_for_master_commands(socket) do
     receive do
       {:tcp, ^socket, data} ->
-        handle_master_commands(data)  # Process the received data
-        listen_for_master_commands(socket)  # Continue listening
-
+        process_master_command(data)
+        listen_for_master_commands(socket)
       {:tcp_closed, ^socket} ->
         IO.puts("Connection to master closed")
+      {:tcp_error, ^socket, reason} ->
+        IO.puts("Error in connection to master: #{inspect(reason)}")
     end
   end
 
-  defp handle_master_commands(data) do
+  defp process_master_command(data) do
     case Server.Protocol.parse(data) do
-      {:ok, parsed_command, rest} ->
-        apply_command(parsed_command)  # Apply the command to the local state
-        handle_master_commands(rest)  # Handle any remaining data
-
-      {:continuation, fun} ->
-        # Store the continuation function to handle more data later
-        # You might want to buffer the data until the entire command is received
-        # For simplicity, let's assume we're calling it directly here
-        fun.("")  # Call with empty string to simulate more data being received
+      {:ok, parsed_data, rest} ->
+        execute_master_command(parsed_data)
+        if rest != "", do: process_master_command(rest)
+      {:continuation, _fun} ->
+        # Handle incomplete command (you might need to buffer this data)
+        IO.puts("Incomplete command received from master")
     end
   end
 
-  defp apply_command(["SET", key, value]) do
-    Server.Store.update(key, value)  # Update the local store
-    # No response is sent back to the master
+  defp execute_master_command([command | args]) do
+    case String.upcase(to_string(command)) do
+      "SET" ->
+        [key, value | rest] = args
+        case rest do
+          [expire_command, expire_time] when expire_command in ["EX", "PX"] ->
+            time_ms = if expire_command == "EX", do: String.to_integer(expire_time) * 1000, else: String.to_integer(expire_time)
+            Server.Store.update(key, value, time_ms)
+          [] ->
+            Server.Store.update(key, value)
+        end
+      # Add other commands as needed
+      _ ->
+        IO.puts("Unknown command from master: #{command}")
+    end
   end
-
-  defp apply_command(_command) do
-    # Handle other commands as needed
-  end
-
-
 
 
   #----------------------------------------------------------------------------------
