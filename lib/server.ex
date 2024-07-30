@@ -170,7 +170,7 @@ require Logger
   defp listen_for_master_commands(socket) do
     case :gen_tcp.recv(socket, 0) do
       {:ok, data} ->
-        process_master_commands(data)
+        process_master_commands(data, socket)
         listen_for_master_commands(socket)
       {:error, :closed} ->
         IO.puts("Connection to master closed")
@@ -179,17 +179,17 @@ require Logger
     end
   end
 
-  defp process_master_commands(data) do
+  defp process_master_commands(data, socket) do
     case Server.Protocol.parse(data) do
       {:ok, parsed_data, rest} ->
-        execute_master_command(parsed_data)
-        if rest != "", do: process_master_commands(rest)
+        execute_master_command(parsed_data, socket)
+        if rest != "", do: process_master_commands(rest, socket)
       {:continuation, _} ->
         IO.puts("Incomplete command received from master")
     end
   end
 
-  defp execute_master_command(parsed_data) do
+  defp execute_master_command(parsed_data, socket) do
     case parsed_data do
       ["SET", key, value | rest] ->
         case rest do
@@ -202,6 +202,15 @@ require Logger
           [] ->
             Server.Store.update(key, value)
         end
+        ["GET", key] ->
+          case Server.Store.get_value_or_false(key) do
+            {:ok, value} ->
+              response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+              write_line(response, socket)
+
+            {:error, _reason} ->
+              write_line("$-1\r\n", socket)
+          end
       _ ->
         IO.puts("Unknown command from master: #{inspect(parsed_data)}")
     end
