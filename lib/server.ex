@@ -211,6 +211,7 @@ require Logger
   defp is_master_connection?(client, config) do
     case :inet.peername(client) do
       {:ok, {address, _port}} ->
+        IO.puts("Master Connection")
         address == elem(config.replica_of || {nil, nil}, 0)
       _ -> false
     end
@@ -244,6 +245,7 @@ require Logger
 
   defp handle_client_connection(client, config) do
     try do
+      IO.puts("client connection")
       client
       |> read_line()
       |> process_command(client, config)
