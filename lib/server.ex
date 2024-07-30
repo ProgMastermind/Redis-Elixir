@@ -59,7 +59,7 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            listen_for_master_commands(socket)
+            spawn_link(fn -> listen_for_master_commands(socket) end)
             # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
