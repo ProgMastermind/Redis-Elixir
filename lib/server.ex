@@ -167,6 +167,7 @@ require Logger
       {:ok, data} ->
         new_buffer = buffer <> data
         {commands, remaining_buffer} = split_commands(new_buffer)
+        IO.puts("commmands: #{commands}")
         Enum.each(commands, &process_master_command(socket, &1))
         listen_for_master_commands(socket, remaining_buffer)
       {:error, :closed} ->
