@@ -74,8 +74,8 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket),
-         :ok <- receive_rdb_file(socket) do
+         :ok <- send_psync(socket) do
+        #  :ok <- receive_rdb_file(socket) do
       :ok
     else
       {:error, reason} ->
@@ -125,18 +125,18 @@ require Logger
     end
   end
 
-  defp receive_rdb_file(socket) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, "$" <> rest} ->
-        [size_str, _] = String.split(rest, "\r\n", parts: 2)
-        size = String.to_integer(size_str)
-        case :gen_tcp.recv(socket, size) do
-          {:ok, _rdb_data} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  # defp receive_rdb_file(socket) do
+  #   case :gen_tcp.recv(socket, 0) do
+  #     {:ok, "$" <> rest} ->
+  #       [size_str, _] = String.split(rest, "\r\n", parts: 2)
+  #       size = String.to_integer(size_str)
+  #       case :gen_tcp.recv(socket, size) do
+  #         {:ok, _rdb_data} -> :ok
+  #         {:error, reason} -> {:error, reason}
+  #       end
+  #     {:error, reason} -> {:error, reason}
+  #   end
+  # end
 
   defp listen_for_master_commands(socket) do
     case :gen_tcp.recv(socket, 0) do
