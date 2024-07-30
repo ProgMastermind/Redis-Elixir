@@ -60,7 +60,7 @@ require Logger
           :ok ->
             IO.puts("Handshake completed successfully")
             :inet.setopts(socket, [active: true])
-            spawn_link(fn -> listen_for_master_commands(socket) end)
+            listen_for_master_commands(socket)
           {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -152,11 +152,15 @@ require Logger
     end
   end
 
-  defp listen_for_master_commands(socket) do
+  defp listen_for_master_commands(socket, buffer \\ "") do
     receive do
       {:tcp, ^socket, data} ->
-        process_master_command(data)
-        listen_for_master_commands(socket)
+        new_buffer = buffer <> data
+        IO.puts("Recived data from the master")
+        case process_master_commands(new_buffer) do
+          {:remainder, rest} -> listen_for_master_commands(socket, rest)
+          :ok -> listen_for_master_commands(socket)
+        end
       {:tcp_closed, ^socket} ->
         IO.puts("Connection to master closed")
       {:tcp_error, ^socket, reason} ->
@@ -164,14 +168,13 @@ require Logger
     end
   end
 
-  defp process_master_command(data) do
+  defp process_master_commands(data) do
     case Server.Protocol.parse(data) do
       {:ok, parsed_data, rest} ->
         execute_master_command(parsed_data)
-        if rest != "", do: process_master_command(rest)
+        if rest != "", do: process_master_commands(rest), else: :ok
       {:continuation, _fun} ->
-        # Handle incomplete command (you might need to buffer this data)
-        IO.puts("Incomplete command received from master")
+        {:remainder, data}
     end
   end
 
