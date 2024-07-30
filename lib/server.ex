@@ -152,133 +152,63 @@ require Logger
   end
 
 
-  # defp listen_for_master_commands(socket) do
-  #   IO.puts("listen for master commands...")
-  #   listen_for_master_commands(socket, "")
-  # end
-
-  # defp listen_for_master_commands(socket, buffer) do
-  #   receive do
-  #     {:tcp, ^socket, data} ->
-  #       IO.puts("Received data from master: #{inspect(data)}")
-  #       new_buffer = buffer <> data
-  #       process_buffer(socket, new_buffer)
-  #     {:tcp_closed, ^socket} ->
-  #       IO.puts("Connection to master closed")
-  #     {:tcp_error, ^socket, reason} ->
-  #       IO.puts("Error receiving data from master: #{inspect(reason)}")
-  #   end
-  # end
-
   defp listen_for_master_commands(socket) do
-    IO.puts("Listening for master commands...")
-    case receive_rdb_file(socket) do
-      :ok ->
-        IO.puts("RDB file received successfully")
-        listen_for_commands(socket, "")
-      {:error, reason} ->
-        IO.puts("Error receiving RDB file: #{inspect(reason)}")
-    end
+    IO.puts("listen for master commands...")
+    listen_for_master_commands(socket, "")
   end
 
-  defp receive_rdb_file(socket) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, "$" <> rest} ->
-        [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
-        length = String.to_integer(length_str)
-        if byte_size(rdb_data) < length do
-          case :gen_tcp.recv(socket, length - byte_size(rdb_data)) do
-            {:ok, _remaining_data} ->
-              IO.puts("Received full RDB file")
-              :ok
-            error -> error
-          end
-        else
-          IO.puts("Received full RDB file")
-          :ok
-        end
-      error -> error
-    end
-  end
-
-  defp listen_for_commands(socket, buffer) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, data} ->
+  defp listen_for_master_commands(socket, buffer) do
+    receive do
+      {:tcp, ^socket, data} ->
         IO.puts("Received data from master: #{inspect(data)}")
         new_buffer = buffer <> data
-        process_commands(socket, new_buffer)
-      {:error, :closed} ->
+        process_buffer(socket, new_buffer)
+      {:tcp_closed, ^socket} ->
         IO.puts("Connection to master closed")
-      {:error, reason} ->
+      {:tcp_error, ^socket, reason} ->
         IO.puts("Error receiving data from master: #{inspect(reason)}")
     end
   end
 
-  defp process_commands(socket, buffer) do
-    case Server.Protocol.parse(buffer) do
-      {:ok, command, rest} ->
-        process_master_command(command)
-        process_commands(socket, rest)
-      {:continuation, _} ->
-        listen_for_commands(socket, buffer)
+
+  defp process_buffer(socket, buffer) do
+    case split_commands(buffer) do
+      {[], remaining} ->
+        listen_for_master_commands(socket, remaining)
+      {commands, remaining} ->
+        Enum.each(commands, &process_master_command(socket, &1))
+        process_buffer(socket, remaining)
     end
   end
 
-  defp process_master_command(parsed_data) do
-    IO.puts("Processing command: #{inspect(parsed_data)}")
+  defp split_commands(buffer) do
+    case Server.Protocol.parse(buffer) do
+      {:ok, command, rest} ->
+        {more_commands, final_rest} = split_commands(rest)
+        {[command | more_commands], final_rest}
+      {:continuation, _} ->
+        {[], buffer}
+    end
+  end
+
+  defp process_master_command(_socket, parsed_data) do
     case parsed_data do
       ["SET", key, value | rest] ->
         case rest do
-          ["PX", expire_time] ->
-            time_ms = String.to_integer(expire_time)
+        [command, time] ->
+          command = String.upcase(to_string(command))
+          if command == "PX" do
+            time_ms = String.to_integer(time)
             Server.Store.update(key, value, time_ms)
-          [] ->
-            Server.Store.update(key, value)
-        end
+          end
+        [] ->
+          Server.Store.update(key, value)
+      end
         IO.puts("Replica state updated: SET #{key} #{value}")
       _ ->
         IO.puts("Unknown command from master: #{inspect(parsed_data)}")
     end
   end
-
-  # defp process_buffer(socket, buffer) do
-  #   case split_commands(buffer) do
-  #     {[], remaining} ->
-  #       listen_for_master_commands(socket, remaining)
-  #     {commands, remaining} ->
-  #       Enum.each(commands, &process_master_command(socket, &1))
-  #       process_buffer(socket, remaining)
-  #   end
-  # end
-
-  # defp split_commands(buffer) do
-  #   case Server.Protocol.parse(buffer) do
-  #     {:ok, command, rest} ->
-  #       {more_commands, final_rest} = split_commands(rest)
-  #       {[command | more_commands], final_rest}
-  #     {:continuation, _} ->
-  #       {[], buffer}
-  #   end
-  # end
-
-  # defp process_master_command(_socket, parsed_data) do
-  #   case parsed_data do
-  #     ["SET", key, value | rest] ->
-  #       case rest do
-  #       [command, time] ->
-  #         command = String.upcase(to_string(command))
-  #         if command == "PX" do
-  #           time_ms = String.to_integer(time)
-  #           Server.Store.update(key, value, time_ms)
-  #         end
-  #       [] ->
-  #         Server.Store.update(key, value)
-  #     end
-  #       IO.puts("Replica state updated: SET #{key} #{value}")
-  #     _ ->
-  #       IO.puts("Unknown command from master: #{inspect(parsed_data)}")
-  #   end
-  # end
 
   #----------------------------------------------------------------------------------
 
