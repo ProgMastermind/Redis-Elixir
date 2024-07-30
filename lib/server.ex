@@ -79,7 +79,6 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-        #  :ok <- receive_rdb_file(socket) do
       :inet.setopts(socket, [active: true])
       :ok
     else
@@ -90,18 +89,6 @@ require Logger
     end
   end
 
-  defp receive_rdb_file(socket) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, "$" <> rest} ->
-        [length_str, _] = String.split(rest, "\r\n", parts: 2)
-        length = String.to_integer(length_str)
-        case :gen_tcp.recv(socket, length) do
-          {:ok, _rdb_data} -> :ok
-          error -> error
-        end
-      error -> error
-    end
-  end
 
   defp send_ping(socket) do
     send_command(socket, ["PING"], "+PONG\r\n")
@@ -172,21 +159,15 @@ require Logger
   end
 
   defp listen_for_master_commands(socket, buffer) do
-    receive do
-      {:tcp, ^socket, data} ->
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, data} ->
         IO.puts("Received data from master: #{inspect(data)}")
         new_buffer = buffer <> data
-        {commands, remaining} = split_commands(new_buffer)
-        Enum.each(commands, &process_master_command(socket, &1))
-        listen_for_master_commands(socket, remaining)
-      {:tcp_closed, ^socket} ->
+        # process_commands(socket, new_buffer)
+      {:error, :closed} ->
         IO.puts("Connection to master closed")
-      {:tcp_error, ^socket, reason} ->
+      {:error, reason} ->
         IO.puts("Error receiving data from master: #{inspect(reason)}")
-    after
-      5000 ->
-        IO.puts("No data received from master in the last 5 seconds")
-        listen_for_master_commands(socket, buffer)
     end
   end
 
