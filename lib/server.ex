@@ -59,7 +59,7 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            spawn_link(fn -> listen_for_master_commands(socket) end)
+            listen_for_master_commands(socket)
             # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -78,8 +78,8 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket),
-         :ok <- receive_rdb_file(socket) do
+         :ok <- send_psync(socket) do
+        #  :ok <- receive_rdb_file(socket) do
       :inet.setopts(socket, [active: true])  # Set socket to active mode
       :ok
     else
@@ -155,60 +155,44 @@ require Logger
 
   defp listen_for_master_commands(socket) do
     IO.puts("Listening for master commands...")
-    case receive_rdb_file(socket) do
-      :ok ->
-        IO.puts("RDB file received successfully")
-        listen_for_commands(socket, "")
-      {:error, reason} ->
-        IO.puts("Error receiving RDB file: #{inspect(reason)}")
-    end
+    listen_for_master_commands(socket, "")
   end
 
-  defp receive_rdb_file(socket) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, "$" <> rest} ->
-        [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
-        length = String.to_integer(length_str)
-        if byte_size(rdb_data) < length do
-          case :gen_tcp.recv(socket, length - byte_size(rdb_data)) do
-            {:ok, _remaining_data} ->
-              IO.puts("Received full RDB file")
-              :ok
-            error -> error
-          end
-        else
-          IO.puts("Received full RDB file")
-          :ok
-        end
-      error -> error
-    end
-  end
-
-  defp listen_for_commands(socket, buffer) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, data} ->
+  defp listen_for_master_commands(socket, buffer) do
+    receive do
+      {:tcp, ^socket, data} ->
         IO.puts("Received data from master: #{inspect(data)}")
         new_buffer = buffer <> data
-        process_commands(socket, new_buffer)
-      {:error, :closed} ->
+        process_buffer(socket, new_buffer)
+      {:tcp_closed, ^socket} ->
         IO.puts("Connection to master closed")
-      {:error, reason} ->
+      {:tcp_error, ^socket, reason} ->
         IO.puts("Error receiving data from master: #{inspect(reason)}")
     end
   end
 
-  defp process_commands(socket, buffer) do
-    case Server.Protocol.parse(buffer) do
-      {:ok, command, rest} ->
-        process_master_command(command)
-        process_commands(socket, rest)
-      {:continuation, _} ->
-        listen_for_commands(socket, buffer)
+  defp process_buffer(socket, buffer) do
+    case split_commands(buffer) do
+      {[], remaining} ->
+        listen_for_master_commands(socket, remaining)
+      {commands, remaining} ->
+        Enum.each(commands, &process_master_command(socket, &1))
+        process_buffer(socket, remaining)
     end
   end
 
-  defp process_master_command(parsed_data) do
-    IO.puts("Processing command: #{inspect(parsed_data)}")
+  defp split_commands(buffer) do
+    case Server.Protocol.parse(buffer) do
+      {:ok, command, rest} ->
+        {more_commands, final_rest} = split_commands(rest)
+        {[command | more_commands], final_rest}
+      {:continuation, _} ->
+        {[], buffer}
+    end
+  end
+
+  defp process_master_command(_socket, parsed_data) do
+    IO.puts("Processing master command: #{inspect(parsed_data)}")
     case parsed_data do
       ["SET", key, value | rest] ->
         case rest do
