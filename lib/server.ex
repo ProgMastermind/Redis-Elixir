@@ -59,8 +59,8 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            spawn(fn -> listen_for_master_commands(socket) end)
-            # listen_for_master_commands(socket)
+            # spawn(fn -> listen_for_master_commands(socket) end)
+            listen_for_master_commands(socket)
             # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -167,11 +167,26 @@ require Logger
   defp receive_rdb_file(socket) do
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, "$" <> rest} ->
-        IO.puts(rest)
-        [length_str, _rdb_data] = String.split(rest, "\r\n", parts: 2)
+        [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
         length = String.to_integer(length_str)
-        IO.puts("Received full RDB file")
-        :ok
+        if byte_size(rdb_data) < length do
+          case :gen_tcp.recv(socket, length - byte_size(rdb_data), 5000) do
+            {:ok, remaining_data} ->
+              IO.puts("Received full RDB file")
+              :ok
+            {:error, :closed} ->
+              IO.puts("Connection closed while receiving RDB file")
+              {:error, :closed}
+            error -> error
+          end
+        else
+          IO.puts("Received full RDB file")
+          :ok
+        end
+      {:error, :closed} ->
+        IO.puts("Connection closed before receiving RDB file")
+        {:error, :closed}
+      error -> error
     end
   end
 
