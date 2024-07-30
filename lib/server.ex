@@ -167,6 +167,7 @@ require Logger
   defp receive_rdb_file(socket) do
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, "$" <> rest} ->
+        IO.puts(rest)
         [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
         length = String.to_integer(length_str)
         if byte_size(rdb_data) < length do
