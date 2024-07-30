@@ -170,7 +170,6 @@ require Logger
     end
   end
 
-
   defp process_buffer(socket, buffer) do
     case split_commands(buffer) do
       {[], remaining} ->
