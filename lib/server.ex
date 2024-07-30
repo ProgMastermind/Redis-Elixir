@@ -81,6 +81,7 @@ require Logger
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
       :inet.setopts(socket, [active: true])
+      spawn(fn -> listen_for_master_commands(socket) end)
       :ok
     else
       {:error, reason} ->
@@ -153,6 +154,43 @@ require Logger
     end
   end
 
+  defp listen_for_master_commands(socket) do
+    receive do
+      {:tcp, ^socket, data} ->
+        handle_master_commands(data)  # Process the received data
+        listen_for_master_commands(socket)  # Continue listening
+
+      {:tcp_closed, ^socket} ->
+        IO.puts("Connection to master closed")
+    end
+  end
+
+  defp handle_master_commands(data) do
+    case Server.Protocol.parse(data) do
+      {:ok, parsed_command, rest} ->
+        apply_command(parsed_command)  # Apply the command to the local state
+        handle_master_commands(rest)  # Handle any remaining data
+
+      {:continuation, fun} ->
+        # Store the continuation function to handle more data later
+        # You might want to buffer the data until the entire command is received
+        # For simplicity, let's assume we're calling it directly here
+        fun.("")  # Call with empty string to simulate more data being received
+    end
+  end
+
+  defp apply_command(["SET", key, value]) do
+    Server.Store.update(key, value)  # Update the local store
+    # No response is sent back to the master
+  end
+
+  defp apply_command(_command) do
+    # Handle other commands as needed
+  end
+
+
+
+
   #----------------------------------------------------------------------------------
 
   # Master Server Code
@@ -165,7 +203,6 @@ require Logger
         {:error, reason}
     end
   end
-
 
   defp serve(client, config) do
     try do
