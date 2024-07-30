@@ -78,8 +78,8 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket),
-         :ok <- receive_rdb_file(socket) do
+         :ok <- send_psync(socket) do
+        #  :ok <- receive_rdb_file(socket) do
       :inet.setopts(socket, [active: true])
       :ok
     else
