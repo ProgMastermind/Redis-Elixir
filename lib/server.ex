@@ -113,7 +113,7 @@ require Logger
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, "+FULLRESYNC " <> rest} ->
         [repl_id, offset] = String.split(String.trim(rest), " ")
-        IO.puts("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
+        Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
         :ok
       {:ok, response} ->
         IO.puts("Unexpected PSYNC response: #{inspect(response)}")
