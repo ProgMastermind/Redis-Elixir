@@ -59,8 +59,7 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            :inet.setopts(socket, [active: true])
-            listen_for_master_commands(socket)
+            serve(socket, %{replica_of: {master_host, master_port}})
           {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -209,13 +208,47 @@ require Logger
     end
   end
 
+  defp is_master_connection?(client, config) do
+    case :inet.peername(client) do
+      {:ok, {address, _port}} ->
+        address == elem(config.replica_of || {nil, nil}, 0)
+      _ -> false
+    end
+  end
+
+  # defp serve(client, config) do
+  #   try do
+  #     client
+  #     |> read_line()
+  #     |> process_command(client, config)
+
+  #     serve(client, config)
+  #   catch
+  #     kind, reason ->
+  #       {:error, {kind, reason, __STACKTRACE__}}
+  #   end
+  # end
+
   defp serve(client, config) do
+    if is_master_connection?(client, config) do
+      handle_master_connection(client)
+    else
+      handle_client_connection(client, config)
+    end
+  end
+
+  defp handle_master_connection(client) do
+    :inet.setopts(client, [active: true])
+    listen_for_master_commands(client)
+  end
+
+  defp handle_client_connection(client, config) do
     try do
       client
       |> read_line()
       |> process_command(client, config)
 
-      serve(client, config)
+      handle_client_connection(client, config)
     catch
       kind, reason ->
         {:error, {kind, reason, __STACKTRACE__}}
