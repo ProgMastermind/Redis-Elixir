@@ -168,19 +168,35 @@ require Logger
       {:ok, "$" <> rest} ->
         [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
         length = String.to_integer(length_str)
+
         if byte_size(rdb_data) < length do
-          case :gen_tcp.recv(socket, length - byte_size(rdb_data)) do
-            {:ok, _remaining_data} ->
-              IO.puts("Received full RDB file")
+          case receive_remaining_rdb_data(socket, length - byte_size(rdb_data), rdb_data) do
+            {:ok, full_rdb_data} ->
+              process_rdb_data(full_rdb_data)
               :ok
             error -> error
           end
         else
-          IO.puts("Received full RDB file")
+          process_rdb_data(rdb_data)
           :ok
         end
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp receive_remaining_rdb_data(socket, remaining_length, acc) do
+    case :gen_tcp.recv(socket, remaining_length) do
+      {:ok, data} ->
+        {:ok, acc <> data}
       error -> error
     end
+  end
+
+  defp process_rdb_data(rdb_data) do
+    IO.puts("Received full RDB file of size: #{byte_size(rdb_data)} bytes")
+    # Here you would typically parse and apply the RDB data to your replica's state
+    # For now, we'll just log the reception
   end
 
   defp listen_for_commands(socket, buffer) do
