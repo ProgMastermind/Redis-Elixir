@@ -74,8 +74,9 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket) do
-        #  :ok <- receive_rdb_file(socket) do
+         :ok <- send_psync(socket),
+         :ok <- receive_rdb_file(socket) do
+      IO.puts("Handshake completed successfully")
       :ok
     else
       {:error, reason} ->
@@ -98,7 +99,29 @@ require Logger
   end
 
   defp send_psync(socket) do
-    send_command(socket, ["PSYNC", "?", "-1"], "+FULLRESYNC <REPL_ID> 0\r\n")
+    packed_command = Server.Protocol.pack(["PSYNC", "?", "-1"]) |> IO.iodata_to_binary()
+    case :gen_tcp.send(socket, packed_command) do
+      :ok ->
+        receive_psync_response(socket)
+      {:error, reason} ->
+        IO.puts("Failed to send PSYNC command")
+        {:error, reason}
+    end
+  end
+
+  defp receive_psync_response(socket) do
+    case :gen_tcp.recv(socket, 0, 5000) do
+      {:ok, "+FULLRESYNC " <> rest} ->
+        [repl_id, offset] = String.split(String.trim(rest), " ")
+        IO.puts("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
+        :ok
+      {:ok, response} ->
+        IO.puts("Unexpected PSYNC response: #{inspect(response)}")
+        {:error, :unexpected_response}
+      {:error, reason} ->
+        IO.puts("Error receiving PSYNC response: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   defp send_command(socket, command, expected_response) do
@@ -125,18 +148,24 @@ require Logger
     end
   end
 
-  # defp receive_rdb_file(socket) do
-  #   case :gen_tcp.recv(socket, 0) do
-  #     {:ok, "$" <> rest} ->
-  #       [size_str, _] = String.split(rest, "\r\n", parts: 2)
-  #       size = String.to_integer(size_str)
-  #       case :gen_tcp.recv(socket, size) do
-  #         {:ok, _rdb_data} -> :ok
-  #         {:error, reason} -> {:error, reason}
-  #       end
-  #     {:error, reason} -> {:error, reason}
-  #   end
-  # end
+  defp receive_rdb_file(socket) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, "$" <> rest} ->
+        [size_str, _] = String.split(rest, "\r\n", parts: 2)
+        size = String.to_integer(size_str)
+        case :gen_tcp.recv(socket, size) do
+          {:ok, _rdb_data} ->
+            IO.puts("RDB file received successfully")
+            :ok
+          {:error, reason} ->
+            IO.puts("Error receiving RDB data: #{inspect(reason)}")
+            {:error, reason}
+        end
+      {:error, reason} ->
+        IO.puts("Error receiving RDB file size: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
 
   defp listen_for_master_commands(socket) do
     case :gen_tcp.recv(socket, 0) do
