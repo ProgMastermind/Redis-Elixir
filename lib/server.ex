@@ -202,7 +202,7 @@ require Logger
           [] ->
             Server.Store.update(key, value)
         end
-      ["GET", key] ->
+      ["GET", [key]] ->
         case Server.Store.get_value_or_false(key) do
           {:ok, value} ->
             response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
