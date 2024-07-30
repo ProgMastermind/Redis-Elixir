@@ -113,7 +113,7 @@ require Logger
   defp receive_psync_response(socket) do
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, "+FULLRESYNC " <> rest} ->
-        [repl_id, offset] = String.split(String.trim(rest), " ")
+        [_repl_id, _offset] = String.split(String.trim(rest), " ")
         # Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
         :ok
       {:ok, response} ->
@@ -149,28 +149,11 @@ require Logger
     end
   end
 
-  defp receive_rdb_file(socket) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, "$" <> rest} ->
-        [size_str, _] = String.split(rest, "\r\n", parts: 2)
-        size = String.to_integer(size_str)
-        case :gen_tcp.recv(socket, size) do
-          {:ok, _rdb_data} ->
-            IO.puts("RDB file received successfully")
-            :ok
-          {:error, reason} ->
-            IO.puts("Error receiving RDB data: #{inspect(reason)}")
-            {:error, reason}
-        end
-      {:error, reason} ->
-        IO.puts("Error receiving RDB file size: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
 
   defp listen_for_master_commands(socket) do
     case :gen_tcp.recv(socket, 0) do
       {:ok, data} ->
+        IO.puts("Received data from master: #{inspect(data)}")
         process_master_commands(socket, data)
         listen_for_master_commands(socket)
       {:error, :closed} ->
@@ -183,6 +166,7 @@ require Logger
   defp process_master_commands(socket, data) do
     case Server.Protocol.parse(data) do
       {:ok, parsed_data, rest} ->
+        IO.puts("Parsed master command: #{inspect(parsed_data)}")
         execute_master_command(socket, parsed_data)
         if rest != "", do: process_master_commands(socket, rest)
       {:continuation, _} ->
@@ -402,8 +386,10 @@ require Logger
   end
 
   defp execute_command("GET", [key], client) do
+    IO.puts("Executing GET command for key: #{key}")
     case Server.Store.get_value_or_false(key) do
       {:ok, value} ->
+        IO.puts("Value found: #{value}")
         response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
         write_line(response, client)
 
