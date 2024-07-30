@@ -59,7 +59,7 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            listen_for_master_commands(socket)
+            spawn(fn -> listen_for_master_commands(socket) end)
             # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -152,52 +152,77 @@ require Logger
     end
   end
 
+  defp setup_socket(socket) do
+    :ok = :inet.setopts(socket, [:binary, active: false, packet: :raw])
+  end
+
   defp listen_for_master_commands(socket) do
-    IO.puts("Listening for master commands...")
+    IO.puts("Setting up socket for RDB file reception...")
+    setup_socket(socket)
+    IO.puts("Socket set up. Attempting to receive RDB file...")
     case receive_rdb_file(socket) do
       :ok ->
         IO.puts("RDB file received successfully")
         listen_for_commands(socket, "")
       {:error, reason} ->
         IO.puts("Error receiving RDB file: #{inspect(reason)}")
+        # You might want to implement some retry logic here
     end
   end
 
   defp receive_rdb_file(socket) do
-    case :gen_tcp.recv(socket, 0) do
+    case :gen_tcp.recv(socket, 0, 5000) do  # Add a timeout of 5 seconds
       {:ok, "$" <> rest} ->
-        [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
-        length = String.to_integer(length_str)
+        try do
+          [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
+          length = String.to_integer(length_str)
 
-        if byte_size(rdb_data) < length do
-          case receive_remaining_rdb_data(socket, length - byte_size(rdb_data), rdb_data) do
-            {:ok, full_rdb_data} ->
-              process_rdb_data(full_rdb_data)
-              :ok
-            error -> error
+          if byte_size(rdb_data) < length do
+            case receive_remaining_rdb_data(socket, length - byte_size(rdb_data), rdb_data) do
+              {:ok, full_rdb_data} ->
+                process_rdb_data(full_rdb_data)
+                :ok
+              error -> error
+            end
+          else
+            process_rdb_data(rdb_data)
+            :ok
           end
-        else
-          process_rdb_data(rdb_data)
-          :ok
+        rescue
+          e ->
+            IO.puts("Error parsing RDB file data: #{inspect(e)}")
+            {:error, :invalid_rdb_format}
         end
+      {:ok, other} ->
+        IO.puts("Unexpected data received: #{inspect(other)}")
+        {:error, :unexpected_data}
+      {:error, :einval} ->
+        IO.puts("Invalid argument error (einval). Socket might be in an invalid state.")
+        {:error, :einval}
       {:error, reason} ->
+        IO.puts("Error receiving RDB file: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
   defp receive_remaining_rdb_data(socket, remaining_length, acc) do
-    case :gen_tcp.recv(socket, remaining_length) do
+    case :gen_tcp.recv(socket, remaining_length, 5000) do  # Add a timeout of 5 seconds
       {:ok, data} ->
         {:ok, acc <> data}
+      {:error, :einval} ->
+        IO.puts("Invalid argument error (einval) while receiving remaining data.")
+        {:error, :einval}
       error -> error
     end
   end
+
 
   defp process_rdb_data(rdb_data) do
     IO.puts("Received full RDB file of size: #{byte_size(rdb_data)} bytes")
     # Here you would typically parse and apply the RDB data to your replica's state
     # For now, we'll just log the reception
   end
+
 
   defp listen_for_commands(socket, buffer) do
     case :gen_tcp.recv(socket, 0) do
