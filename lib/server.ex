@@ -13,6 +13,7 @@ require Logger
       Server.Store,
       Server.Replicationstate,
       Server.Commandbuffer,
+      Server.Clientbuffer,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -132,7 +133,6 @@ require Logger
       |> read_line()
       |> process_command(client, config)
 
-      # send_buffered_commands_to_replica()
       serve(client, config)
     catch
       kind, reason ->
@@ -188,17 +188,19 @@ require Logger
 
   defp send_buffered_commands_to_replica do
     commands = Server.Commandbuffer.get_and_clear_commands()
-    IO.puts("Expected Propogated Commands: #{commands}")
-    case Server.Replicationstate.get_replica_socket() do
-      nil ->
-        IO.puts("No socket found")
-        :ok  # No replica connected
-      socket ->
-        Enum.each(commands, fn command ->
-          packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
-          :gen_tcp.send(socket, packed_command)
-        end)
-    end
+    IO.puts("Expected Propagated Commands: #{inspect(commands)}")
+    clients = Server.Clientbuffer.get_clients()
+
+    Enum.each(clients, fn client ->
+      Enum.each(commands, fn command ->
+        packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+        case :gen_tcp.send(client, packed_command) do
+          :ok -> :ok
+          {:error, reason} ->
+            IO.puts("Failed to send command to replica: #{inspect(reason)}")
+        end
+      end)
+    end)
   end
   # -------------------------------------------------------------------
 
@@ -240,7 +242,7 @@ require Logger
     try do
       response = "+FULLRESYNC #{replication_id()} #{replication_offset()}\r\n"
       :ok = :gen_tcp.send(client, response)
-      Server.Replicationstate.set_replica_socket(client)
+      Server.Clientbuffer.add_client(client)
       send_rdb_file(client)
     catch
       :error, :closed ->
