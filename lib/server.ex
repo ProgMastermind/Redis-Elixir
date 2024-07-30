@@ -48,7 +48,8 @@ require Logger
       spawn_link(fn ->
         case connect_to_master(config.replica_of, config.port) do
           {:ok, master_socket} ->
-            listen_for_master_commands(master_socket)
+            IO.puts("listening from master connect")
+            spawn_link(fn -> listen_for_master_commands(master_socket) end)
           {:error, reason} ->
             IO.puts("Failed to connect to master: #{inspect(reason)}")
         end
