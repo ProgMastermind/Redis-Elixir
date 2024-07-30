@@ -80,7 +80,6 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-      :inet.setopts(socket, [active: true])
       :ok
     else
       {:error, reason} ->
@@ -153,14 +152,8 @@ require Logger
     end
   end
 
-  defp setup_socket(socket) do
-    :ok = :inet.setopts(socket, [:binary, active: false, packet: :raw])
-  end
 
   defp listen_for_master_commands(socket) do
-    IO.puts("Setting up socket for RDB file reception...")
-    setup_socket(socket)
-    IO.puts("Socket set up. Attempting to receive RDB file...")
     case receive_rdb_file(socket) do
       :ok ->
         IO.puts("RDB file received successfully")
