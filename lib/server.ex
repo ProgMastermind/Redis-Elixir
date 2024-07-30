@@ -56,6 +56,7 @@ require Logger
       {:ok, socket} ->
         case perfrom_handshake(socket, replica_port) do
           :ok ->
+            IO.puts("Listening for master commands")
             listen_for_master_commands(socket)
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
