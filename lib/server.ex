@@ -74,8 +74,8 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket),
-         :ok <- receive_rdb_file(socket) do
+         :ok <- send_psync(socket) do
+        #  :ok <- receive_rdb_file(socket) do
       IO.puts("Handshake completed successfully")
       :ok
     else
@@ -113,7 +113,7 @@ require Logger
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, "+FULLRESYNC " <> rest} ->
         [repl_id, offset] = String.split(String.trim(rest), " ")
-        Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
+        # Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
         :ok
       {:ok, response} ->
         IO.puts("Unexpected PSYNC response: #{inspect(response)}")
