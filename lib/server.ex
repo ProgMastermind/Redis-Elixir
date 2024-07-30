@@ -80,7 +80,7 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-      :inet.setopts(socket, [active: true])
+      # :inet.setopts(socket, [active: true])
       :ok
     else
       {:error, reason} ->
