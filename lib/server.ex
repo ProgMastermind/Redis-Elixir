@@ -54,18 +54,28 @@ require Logger
   defp connect_to_master({master_host, master_port}, replica_port) do
     case :gen_tcp.connect(to_charlist(master_host), master_port, [:binary, active: false]) do
       {:ok, socket} ->
-        perfrom_handshake(socket, replica_port)
+        case perfrom_handshake(socket, replica_port) do
+          :ok ->
+            listen_for_master_commands(socket)
+          {:error, reason} ->
+            IO.puts("Handshake failed: #{inspect(reason)}")
+            {:error, reason}
+        end
       {:error, reason} ->
         IO.puts("Failed to connect to master: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
+  # ------------------------------------------------------------------------
+  # Replicas process
+
   defp perfrom_handshake(socket, replica_port) do
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket) do
+         :ok <- send_psync(socket),
+         :ok <- receive_rdb_file(socket) do
       :ok
     else
       {:error, reason} ->
@@ -114,6 +124,61 @@ require Logger
         {:error, reason}
     end
   end
+
+  defp receive_rdb_file(socket) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, "$" <> rest} ->
+        [size_str, _] = String.split(rest, "\r\n", parts: 2)
+        size = String.to_integer(size_str)
+        case :gen_tcp.recv(socket, size) do
+          {:ok, _rdb_data} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp listen_for_master_commands(socket) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, data} ->
+        process_master_commands(data)
+        listen_for_master_commands(socket)
+      {:error, :closed} ->
+        IO.puts("Connection to master closed")
+      {:error, reason} ->
+        IO.puts("Error receiving data from master: #{inspect(reason)}")
+    end
+  end
+
+  defp process_master_commands(data) do
+    case Server.Protocol.parse(data) do
+      {:ok, parsed_data, rest} ->
+        execute_master_command(parsed_data)
+        if rest != "", do: process_master_commands(rest)
+      {:continuation, _} ->
+        IO.puts("Incomplete command received from master")
+    end
+  end
+
+  defp execute_master_command(parsed_data) do
+    case parsed_data do
+      ["SET", key, value | rest] ->
+        case rest do
+          [command, time] ->
+            command = String.upcase(to_string(command))
+            if command == "PX" do
+              time_ms = String.to_integer(time)
+              Server.Store.update(key, value, time_ms)
+            end
+          [] ->
+            Server.Store.update(key, value)
+        end
+      _ ->
+        IO.puts("Unknown command from master: #{inspect(parsed_data)}")
+    end
+  end
+
+  #----------------------------------------------------------------------------------
 
   # Master Server Code
   defp loop_acceptor(socket, config) do
