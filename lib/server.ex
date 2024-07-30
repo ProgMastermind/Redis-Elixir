@@ -78,7 +78,8 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket) do
+         :ok <- send_psync(socket),
+         :ok <- receive_rdb_file(socket) do
       :inet.setopts(socket, [active: true])  # Set socket to active mode
       :ok
     else
@@ -99,6 +100,19 @@ require Logger
 
   defp send_replconf_capa(socket) do
     send_command(socket, ["REPLCONF", "capa", "psync2"], "+OK\r\n")
+  end
+
+  defp receive_rdb_file(socket) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, "$" <> rest} ->
+        [length_str, _] = String.split(rest, "\r\n", parts: 2)
+        length = String.to_integer(length_str)
+        case :gen_tcp.recv(socket, length) do
+          {:ok, _rdb_data} -> :ok
+          error -> error
+        end
+      error -> error
+    end
   end
 
   defp send_psync(socket) do
@@ -162,21 +176,17 @@ require Logger
       {:tcp, ^socket, data} ->
         IO.puts("Received data from master: #{inspect(data)}")
         new_buffer = buffer <> data
-        process_buffer(socket, new_buffer)
+        {commands, remaining} = split_commands(new_buffer)
+        Enum.each(commands, &process_master_command(socket, &1))
+        listen_for_master_commands(socket, remaining)
       {:tcp_closed, ^socket} ->
         IO.puts("Connection to master closed")
       {:tcp_error, ^socket, reason} ->
         IO.puts("Error receiving data from master: #{inspect(reason)}")
-    end
-  end
-
-  defp process_buffer(socket, buffer) do
-    case split_commands(buffer) do
-      {[], remaining} ->
-        listen_for_master_commands(socket, remaining)
-      {commands, remaining} ->
-        Enum.each(commands, &process_master_command(socket, &1))
-        process_buffer(socket, remaining)
+    after
+      5000 ->
+        IO.puts("No data received from master in the last 5 seconds")
+        listen_for_master_commands(socket, buffer)
     end
   end
 
@@ -191,18 +201,16 @@ require Logger
   end
 
   defp process_master_command(_socket, parsed_data) do
+    IO.puts("Processing master command: #{inspect(parsed_data)}")
     case parsed_data do
       ["SET", key, value | rest] ->
         case rest do
-        [command, time] ->
-          command = String.upcase(to_string(command))
-          if command == "PX" do
-            time_ms = String.to_integer(time)
+          ["PX", expire_time] ->
+            time_ms = String.to_integer(expire_time)
             Server.Store.update(key, value, time_ms)
-          end
-        [] ->
-          Server.Store.update(key, value)
-      end
+          [] ->
+            Server.Store.update(key, value)
+        end
         IO.puts("Replica state updated: SET #{key} #{value}")
       _ ->
         IO.puts("Unknown command from master: #{inspect(parsed_data)}")
