@@ -59,8 +59,8 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            # spawn(fn -> listen_for_master_commands(socket) end)
-            listen_for_master_commands(socket)
+            spawn(fn -> listen_for_master_commands(socket) end)
+            # listen_for_master_commands(socket)
             # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -170,8 +170,8 @@ require Logger
         IO.puts(rest)
         [length_str, _rdb_data] = String.split(rest, "\r\n", parts: 2)
         length = String.to_integer(length_str)
-          IO.puts("Received full RDB file")
-          :ok
+        IO.puts("Received full RDB file")
+        :ok
     end
   end
 
