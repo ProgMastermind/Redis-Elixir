@@ -60,7 +60,7 @@ require Logger
           :ok ->
             IO.puts("Handshake completed successfully")
             # spawn(fn -> listen_for_master_commands(socket) end)
-            # listen_for_master_commands(socket)
+            listen_for_master_commands(socket)
             # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -150,6 +150,77 @@ require Logger
       {:error, reason} ->
         IO.puts("Error receiving response: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  defp listen_for_master_commands(socket) do
+    IO.puts("Listening for master commands...")
+    case receive_rdb_file(socket) do
+      :ok ->
+        IO.puts("RDB file received successfully")
+        process_master_commands(socket, "")
+      {:error, reason} ->
+        IO.puts("Error receiving RDB file: #{inspect(reason)}")
+    end
+  end
+
+  defp receive_rdb_file(socket) do
+    case :gen_tcp.recv(socket, 0, 5000) do
+      {:ok, "$" <> rest} ->
+        [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
+        length = String.to_integer(length_str)
+        if byte_size(rdb_data) < length do
+          case :gen_tcp.recv(socket, length - byte_size(rdb_data), 5000) do
+            {:ok, remaining_data} ->
+              IO.puts("Received full RDB file")
+              :ok
+            error -> error
+          end
+        else
+          IO.puts("Received full RDB file")
+          :ok
+        end
+      error -> error
+    end
+  end
+
+  defp process_master_commands(socket, buffer) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, data} ->
+        new_buffer = buffer <> data
+        case process_buffer(new_buffer) do
+          {:ok, rest} -> process_master_commands(socket, rest)
+          {:continuation, _} -> process_master_commands(socket, new_buffer)
+        end
+      {:error, :closed} ->
+        IO.puts("Connection to master closed")
+      {:error, reason} ->
+        IO.puts("Error receiving data from master: #{inspect(reason)}")
+    end
+  end
+
+  defp process_buffer(buffer) do
+    case Server.Protocol.parse(buffer) do
+      {:ok, command, rest} ->
+        execute_master_command(command)
+        {:ok, rest}
+      other -> other
+    end
+  end
+
+  defp execute_master_command(parsed_data) do
+    IO.puts("Executing master command: #{inspect(parsed_data)}")
+    case parsed_data do
+      ["SET", key, value | rest] ->
+        case rest do
+          ["PX", expire_time] ->
+            time_ms = String.to_integer(expire_time)
+            Server.Store.update(key, value, time_ms)
+          [] ->
+            Server.Store.update(key, value)
+        end
+      _ ->
+        IO.puts("Unknown command from master: #{inspect(parsed_data)}")
     end
   end
 
