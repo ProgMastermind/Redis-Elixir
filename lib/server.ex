@@ -60,7 +60,7 @@ require Logger
           :ok ->
             IO.puts("Handshake completed successfully")
             # spawn(fn -> listen_for_master_commands(socket) end)
-            listen_for_master_commands(socket)
+            # listen_for_master_commands(socket)
             # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -80,6 +80,7 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
+      :inet.setopts(socket, [active: true])
       :ok
     else
       {:error, reason} ->
@@ -153,110 +154,6 @@ require Logger
   end
 
 
-  defp listen_for_master_commands(socket) do
-    case receive_rdb_file(socket) do
-      :ok ->
-        IO.puts("RDB file received successfully")
-        listen_for_commands(socket, "")
-      {:error, reason} ->
-        IO.puts("Error receiving RDB file: #{inspect(reason)}")
-        # You might want to implement some retry logic here
-    end
-  end
-
-  defp receive_rdb_file(socket) do
-    case :gen_tcp.recv(socket, 0, 5000) do  # Add a timeout of 5 seconds
-      {:ok, "$" <> rest} ->
-        try do
-          [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
-          length = String.to_integer(length_str)
-
-          if byte_size(rdb_data) < length do
-            case receive_remaining_rdb_data(socket, length - byte_size(rdb_data), rdb_data) do
-              {:ok, full_rdb_data} ->
-                process_rdb_data(full_rdb_data)
-                :ok
-              error -> error
-            end
-          else
-            process_rdb_data(rdb_data)
-            :ok
-          end
-        rescue
-          e ->
-            IO.puts("Error parsing RDB file data: #{inspect(e)}")
-            {:error, :invalid_rdb_format}
-        end
-      {:ok, other} ->
-        IO.puts("Unexpected data received: #{inspect(other)}")
-        {:error, :unexpected_data}
-      {:error, :einval} ->
-        IO.puts("Invalid argument error (einval). Socket might be in an invalid state.")
-        {:error, :einval}
-      {:error, reason} ->
-        IO.puts("Error receiving RDB file: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp receive_remaining_rdb_data(socket, remaining_length, acc) do
-    case :gen_tcp.recv(socket, remaining_length, 5000) do  # Add a timeout of 5 seconds
-      {:ok, data} ->
-        {:ok, acc <> data}
-      {:error, :einval} ->
-        IO.puts("Invalid argument error (einval) while receiving remaining data.")
-        {:error, :einval}
-      error -> error
-    end
-  end
-
-
-  defp process_rdb_data(rdb_data) do
-    IO.puts("Received full RDB file of size: #{byte_size(rdb_data)} bytes")
-    # Here you would typically parse and apply the RDB data to your replica's state
-    # For now, we'll just log the reception
-  end
-
-
-  defp listen_for_commands(socket, buffer) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, data} ->
-        IO.puts("Received data from master: #{inspect(data)}")
-        new_buffer = buffer <> data
-        process_commands(socket, new_buffer)
-      {:error, :closed} ->
-        IO.puts("Connection to master closed")
-      {:error, reason} ->
-        IO.puts("Error receiving data from master: #{inspect(reason)}")
-    end
-  end
-
-  defp process_commands(socket, buffer) do
-    case Server.Protocol.parse(buffer) do
-      {:ok, command, rest} ->
-        process_master_command(command)
-        process_commands(socket, rest)
-      {:continuation, _} ->
-        listen_for_commands(socket, buffer)
-    end
-  end
-
-  defp process_master_command(parsed_data) do
-    IO.puts("Processing command: #{inspect(parsed_data)}")
-    case parsed_data do
-      ["SET", key, value | rest] ->
-        case rest do
-          ["PX", expire_time] ->
-            time_ms = String.to_integer(expire_time)
-            Server.Store.update(key, value, time_ms)
-          [] ->
-            Server.Store.update(key, value)
-        end
-        IO.puts("Replica state updated: SET #{key} #{value}")
-      _ ->
-        IO.puts("Unknown command from master: #{inspect(parsed_data)}")
-    end
-  end
   #----------------------------------------------------------------------------------
 
   # Master Server Code
