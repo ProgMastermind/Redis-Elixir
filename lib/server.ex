@@ -45,8 +45,14 @@ require Logger
     {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
 
     if config.replica_of do
-      # connect_to_master(config.replica_of, config.port)
-      spawn_link(fn -> connect_to_master(config.replica_of, config.port) end)
+      spawn_link(fn ->
+        case connect_to_master(config.replica_of, config.port) do
+          {:ok, master_socket} ->
+            listen_for_master_commands(master_socket)
+          {:error, reason} ->
+            IO.puts("Failed to connect to master: #{inspect(reason)}")
+        end
+      end)
     end
 
     loop_acceptor(socket, config)
@@ -55,10 +61,10 @@ require Logger
   defp connect_to_master({master_host, master_port}, replica_port) do
     case :gen_tcp.connect(to_charlist(master_host), master_port, [:binary, active: false]) do
       {:ok, socket} ->
-        case perfrom_handshake(socket, replica_port) do
+        case perform_handshake(socket, replica_port) do
           :ok ->
-            IO.puts("Listening for master commands")
-            listen_for_master_commands(socket)
+            IO.puts("Handshake completed successfully")
+            {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
             {:error, reason}
@@ -72,7 +78,7 @@ require Logger
   # ------------------------------------------------------------------------
   # Replicas process
 
-  defp perfrom_handshake(socket, replica_port) do
+  defp perform_handshake(socket, replica_port) do
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
