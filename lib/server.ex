@@ -45,7 +45,8 @@ require Logger
     {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
 
     if config.replica_of do
-      connect_to_master(config.replica_of, config.port)
+      # connect_to_master(config.replica_of, config.port)
+      spawn_link(fn -> connect_to_master(config.replica_of, config.port) end)
     end
 
     loop_acceptor(socket, config)
