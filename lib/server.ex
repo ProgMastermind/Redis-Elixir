@@ -78,15 +78,28 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket) do
-        #  :ok <- receive_rdb_file(socket) do
-      :inet.setopts(socket, [active: true])  # Set socket to active mode
+         :ok <- send_psync(socket),
+         :ok <- receive_rdb_file(socket) do
+      :inet.setopts(socket, [active: true])
       :ok
     else
       {:error, reason} ->
         IO.puts("Handshake failed: #{inspect(reason)}")
         :gen_tcp.close(socket)
         {:error, reason}
+    end
+  end
+
+  defp receive_rdb_file(socket) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, "$" <> rest} ->
+        [length_str, _] = String.split(rest, "\r\n", parts: 2)
+        length = String.to_integer(length_str)
+        case :gen_tcp.recv(socket, length) do
+          {:ok, _rdb_data} -> :ok
+          error -> error
+        end
+      error -> error
     end
   end
 
@@ -163,23 +176,20 @@ require Logger
       {:tcp, ^socket, data} ->
         IO.puts("Received data from master: #{inspect(data)}")
         new_buffer = buffer <> data
-        process_buffer(socket, new_buffer)
+        {commands, remaining} = split_commands(new_buffer)
+        Enum.each(commands, &process_master_command(socket, &1))
+        listen_for_master_commands(socket, remaining)
       {:tcp_closed, ^socket} ->
         IO.puts("Connection to master closed")
       {:tcp_error, ^socket, reason} ->
         IO.puts("Error receiving data from master: #{inspect(reason)}")
+    after
+      5000 ->
+        IO.puts("No data received from master in the last 5 seconds")
+        listen_for_master_commands(socket, buffer)
     end
   end
 
-  defp process_buffer(socket, buffer) do
-    case split_commands(buffer) do
-      {[], remaining} ->
-        listen_for_master_commands(socket, remaining)
-      {commands, remaining} ->
-        Enum.each(commands, &process_master_command(socket, &1))
-        process_buffer(socket, remaining)
-    end
-  end
 
   defp split_commands(buffer) do
     case Server.Protocol.parse(buffer) do
