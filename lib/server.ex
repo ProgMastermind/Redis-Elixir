@@ -46,13 +46,7 @@ require Logger
 
     if config.replica_of do
       spawn_link(fn ->
-        case connect_to_master(config.replica_of, config.port) do
-          {:ok, master_socket} ->
-            IO.puts("listening from master socket")
-            listen_for_master_commands(master_socket)
-          {:error, reason} ->
-            IO.puts("Failed to connect to master: #{inspect(reason)}")
-        end
+         connect_to_master(config.replica_of, config.port)
       end)
     end
 
@@ -65,7 +59,8 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            {:ok, socket}
+            spawn_link(fn -> listen_for_master_commands(socket) end)
+            # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
             {:error, reason}
@@ -84,7 +79,7 @@ require Logger
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
-        #  :ok <- receive_rdb_file(socket) do
+      :inet.setopts(socket, [active: true])  # Set socket to active mode
       :ok
     else
       {:error, reason} ->
@@ -158,22 +153,30 @@ require Logger
 
 
   defp listen_for_master_commands(socket) do
-    IO.puts("listen for master command triggered")
+    IO.puts("listen for master commands...")
     listen_for_master_commands(socket, "")
   end
 
   defp listen_for_master_commands(socket, buffer) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, data} ->
+    receive do
+      {:tcp, ^socket, data} ->
+        IO.puts("Received data from master: #{inspect(data)}")
         new_buffer = buffer <> data
-        {commands, remaining_buffer} = split_commands(new_buffer)
-        IO.puts("commmands: #{commands}")
-        Enum.each(commands, &process_master_command(socket, &1))
-        listen_for_master_commands(socket, remaining_buffer)
-      {:error, :closed} ->
+        process_buffer(socket, new_buffer)
+      {:tcp_closed, ^socket} ->
         IO.puts("Connection to master closed")
-      {:error, reason} ->
+      {:tcp_error, ^socket, reason} ->
         IO.puts("Error receiving data from master: #{inspect(reason)}")
+    end
+  end
+
+  defp process_buffer(socket, buffer) do
+    case split_commands(buffer) do
+      {[], remaining} ->
+        listen_for_master_commands(socket, remaining)
+      {commands, remaining} ->
+        Enum.each(commands, &process_master_command(socket, &1))
+        process_buffer(socket, remaining)
     end
   end
 
