@@ -48,7 +48,7 @@ require Logger
       spawn_link(fn ->
         case connect_to_master(config.replica_of, config.port) do
           {:ok, master_socket} ->
-            IO.puts("listening from master connect")
+            IO.puts("listening from master socket")
             listen_for_master_commands(master_socket)
           {:error, reason} ->
             IO.puts("Failed to connect to master: #{inspect(reason)}")
@@ -158,6 +158,7 @@ require Logger
 
 
   defp listen_for_master_commands(socket) do
+    IO.puts("listen for master command triggered")
     listen_for_master_commands(socket, "")
   end
 
@@ -189,15 +190,15 @@ require Logger
     case parsed_data do
       ["SET", key, value | rest] ->
         case rest do
-          [command, time] ->
-            command = String.upcase(to_string(command))
-            if command == "PX" do
-              time_ms = String.to_integer(time)
-              Server.Store.update(key, value, time_ms)
-            end
-          [] ->
-            Server.Store.update(key, value)
-        end
+        [command, time] ->
+          command = String.upcase(to_string(command))
+          if command == "PX" do
+            time_ms = String.to_integer(time)
+            Server.Store.update(key, value, time_ms)
+          end
+        [] ->
+          Server.Store.update(key, value)
+      end
         IO.puts("Replica state updated: SET #{key} #{value}")
       _ ->
         IO.puts("Unknown command from master: #{inspect(parsed_data)}")
