@@ -199,9 +199,11 @@ require Logger
             if command == "PX" do
               time_ms = String.to_integer(time)
               Server.Store.update(key, value, time_ms)
+              IO.puts("updated the replica state")
             end
           [] ->
             Server.Store.update(key, value)
+            IO.puts("updated the replica state")
         end
       ["GET", [key]] ->
         case Server.Store.get_value_or_false(key) do
