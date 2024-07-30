@@ -152,18 +152,43 @@ require Logger
     end
   end
 
-
   defp listen_for_master_commands(socket) do
     IO.puts("Listening for master commands...")
-    listen_for_master_commands(socket, "")
+    case receive_rdb_file(socket) do
+      :ok ->
+        IO.puts("RDB file received successfully")
+        listen_for_commands(socket, "")
+      {:error, reason} ->
+        IO.puts("Error receiving RDB file: #{inspect(reason)}")
+    end
   end
 
-  defp listen_for_master_commands(socket, buffer) do
+  defp receive_rdb_file(socket) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, "$" <> rest} ->
+        [length_str, rdb_data] = String.split(rest, "\r\n", parts: 2)
+        length = String.to_integer(length_str)
+        if byte_size(rdb_data) < length do
+          case :gen_tcp.recv(socket, length - byte_size(rdb_data)) do
+            {:ok, _remaining_data} ->
+              IO.puts("Received full RDB file")
+              :ok
+            error -> error
+          end
+        else
+          IO.puts("Received full RDB file")
+          :ok
+        end
+      error -> error
+    end
+  end
+
+  defp listen_for_commands(socket, buffer) do
     case :gen_tcp.recv(socket, 0) do
       {:ok, data} ->
         IO.puts("Received data from master: #{inspect(data)}")
         new_buffer = buffer <> data
-        # process_commands(socket, new_buffer)
+        process_commands(socket, new_buffer)
       {:error, :closed} ->
         IO.puts("Connection to master closed")
       {:error, reason} ->
@@ -171,19 +196,18 @@ require Logger
     end
   end
 
-
-  defp split_commands(buffer) do
+  defp process_commands(socket, buffer) do
     case Server.Protocol.parse(buffer) do
       {:ok, command, rest} ->
-        {more_commands, final_rest} = split_commands(rest)
-        {[command | more_commands], final_rest}
+        process_master_command(command)
+        process_commands(socket, rest)
       {:continuation, _} ->
-        {[], buffer}
+        listen_for_commands(socket, buffer)
     end
   end
 
-  defp process_master_command(_socket, parsed_data) do
-    IO.puts("Processing master command: #{inspect(parsed_data)}")
+  defp process_master_command(parsed_data) do
+    IO.puts("Processing command: #{inspect(parsed_data)}")
     case parsed_data do
       ["SET", key, value | rest] ->
         case rest do
@@ -198,9 +222,6 @@ require Logger
         IO.puts("Unknown command from master: #{inspect(parsed_data)}")
     end
   end
-
-
-
   #----------------------------------------------------------------------------------
 
   # Master Server Code
