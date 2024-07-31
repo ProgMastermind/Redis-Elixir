@@ -134,31 +134,126 @@ require Logger
     end
   end
 
+  # defp receive_rdb_file(socket) do
+  #   case :gen_tcp.recv(socket, 0, 5000) do
+  #     {:ok, data} ->
+  #       IO.puts("Received data: #{inspect(String.slice(data, 0, 50))}...")  # Log the first 50 chars
+  #       case Server.Protocol.parse(data) do
+  #         {:ok, parsed_data, _rest} ->
+  #           IO.puts("Parsed data: #{inspect(parsed_data)}")  # Debug line
+  #         end
+  #       case data do
+  #         "$" <> rest ->
+  #           [length_str, file_data] = String.split(rest, "\r\n", parts: 2)
+  #           length = String.to_integer(length_str)
+  #           if byte_size(file_data) < length do
+  #             {:ok, remaining_data} = :gen_tcp.recv(socket, length - byte_size(file_data), 5000)
+  #             _file_data = file_data <> remaining_data
+  #           end
+  #           IO.puts("Received RDB file of size #{byte_size(file_data)} bytes")
+  #           :ok
+  #         _ ->
+  #           IO.puts("Invalid RDB format: doesn't start with $")
+  #           {:error, :invalid_rdb_format}
+  #       end
+  #     {:error, reason} ->
+  #       IO.puts("Error receiving RDB file: #{inspect(reason)}")
+  #       {:error, reason}
+  #   end
+  # end
+
   defp receive_rdb_file(socket) do
+    Logger.info("Starting to receive data from socket")
+    receive_data(socket, "", 0)
+  end
+
+  defp receive_data(socket, buffer, expected_length) do
+    Logger.debug("Receiving data. Buffer size: #{byte_size(buffer)}, Expected length: #{expected_length}")
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, data} ->
-        IO.puts("Received data: #{inspect(String.slice(data, 0, 50))}...")  # Log the first 50 chars
-        case Server.Protocol.parse(data) do
-          {:ok, parsed_data, _rest} ->
-            IO.puts("Parsed data: #{inspect(parsed_data)}")  # Debug line
-          end
-        case data do
-          "$" <> rest ->
-            [length_str, file_data] = String.split(rest, "\r\n", parts: 2)
-            length = String.to_integer(length_str)
-            if byte_size(file_data) < length do
-              {:ok, remaining_data} = :gen_tcp.recv(socket, length - byte_size(file_data), 5000)
-              _file_data = file_data <> remaining_data
-            end
-            IO.puts("Received RDB file of size #{byte_size(file_data)} bytes")
-            :ok
-          _ ->
-            IO.puts("Invalid RDB format: doesn't start with $")
-            {:error, :invalid_rdb_format}
+        Logger.debug("Received chunk of size: #{byte_size(data)} bytes")
+        new_buffer = buffer <> data
+        Logger.debug("New buffer size: #{byte_size(new_buffer)} bytes")
+        case parse_data(new_buffer, expected_length) do
+          {:continue, remaining, new_expected_length} ->
+            Logger.info("Incomplete data, continuing to receive. New expected length: #{new_expected_length}")
+            receive_data(socket, remaining, new_expected_length)
+          {:rdb_complete, rdb_data} ->
+            Logger.info("Received complete RDB file of size #{byte_size(rdb_data)} bytes")
+            {:ok, :rdb_complete, rdb_data}
+          {:command, command} ->
+            Logger.info("Received complete command: #{inspect(command)}")
+            {:ok, :command, command}
         end
       {:error, reason} ->
-        IO.puts("Error receiving RDB file: #{inspect(reason)}")
+        Logger.error("Error receiving data: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  defp parse_data("$" <> rest, 0) do
+    Logger.debug("Parsing data starting with '$'")
+    case String.split(rest, "\r\n", parts: 2) do
+      [length_str, remaining] ->
+        length = String.to_integer(length_str)
+        Logger.info("Found RDB length indicator: #{length} bytes")
+        parse_data(remaining, length)
+      _ ->
+        Logger.debug("Incomplete length indicator, continuing to receive")
+        {:continue, "$" <> rest, 0}
+    end
+  end
+
+  defp parse_data(data, expected_length) when byte_size(data) >= expected_length do
+    Logger.debug("Received enough data to potentially complete RDB or command")
+    <<rdb_data::binary-size(expected_length), rest::binary>> = data
+    case rest do
+      "" ->
+        Logger.info("Completed receiving RDB file")
+        {:rdb_complete, rdb_data}
+      _ ->
+        Logger.info("RDB file complete, parsing remaining data as command")
+        parse_command(rest)
+    end
+  end
+
+  defp parse_data(data, expected_length) do
+    Logger.debug("Incomplete data, need #{expected_length - byte_size(data)} more bytes")
+    {:continue, data, expected_length}
+  end
+
+  defp parse_command(data) do
+    Logger.debug("Attempting to parse command from data")
+    case Server.Protocol.parse(data) do
+      {:ok, parsed_command, _rest} ->
+        Logger.info("Successfully parsed command: #{inspect(parsed_command)}")
+        case parsed_command do
+          [_command | args] ->
+            execute_set_command(args)
+        end
+        {:command, parsed_command}
+      {:continuation, _} ->
+        Logger.debug("Incomplete command, continuing to receive")
+        {:continue, data, 0}
+    end
+  end
+
+  defp execute_set_command([key, value | rest]) do
+    try do
+      case rest do
+        ["PX", time] ->
+          time_ms = String.to_integer(time)
+          Server.Store.update(key, value, time_ms)
+        [] ->
+          Server.Store.update(key, value)
+      end
+
+      Server.Commandbuffer.add_command(["SET", key, value | rest])
+      send_buffered_commands_to_replica()
+      {:command, {:ok, "OK"}}
+    catch
+      _ ->
+        {:command, {:error, "Internal server error"}}
     end
   end
 
