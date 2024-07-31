@@ -59,7 +59,8 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             IO.puts("Handshake completed successfully")
-            serve(socket, %{replica_of: {master_host, master_port}})
+            # serve(socket, %{replica_of: {master_host, master_port}})
+
           {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
@@ -80,7 +81,8 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket) do
+         :ok <- send_psync(socket),
+         :ok <- receive_rdb_file(socket) do
           {:ok, state} = :inet.getstat(socket)
           IO.puts("Socket state after handshake: #{inspect(state)}")
       :ok
@@ -91,7 +93,6 @@ require Logger
         {:error, reason}
     end
   end
-
 
   defp send_ping(socket) do
     send_command(socket, ["PING"], "+PONG\r\n")
@@ -121,12 +122,37 @@ require Logger
       {:ok, "+FULLRESYNC " <> rest} ->
         [_repl_id, _offset] = String.split(String.trim(rest), " ")
         # Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
+        receive_rdb_file(socket)
         :ok
       {:ok, response} ->
         IO.puts("Unexpected PSYNC response: #{inspect(response)}")
         {:error, :unexpected_response}
       {:error, reason} ->
         IO.puts("Error receiving PSYNC response: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp receive_rdb_file(socket) do
+    case :gen_tcp.recv(socket, 0, 5000) do
+      {:ok, data} ->
+        IO.puts("Received data: #{inspect(String.slice(data, 0, 50))}...")  # Log the first 50 chars
+        case data do
+          "$" <> rest ->
+            [length_str, file_data] = String.split(rest, "\r\n", parts: 2)
+            length = String.to_integer(length_str)
+            if byte_size(file_data) < length do
+              {:ok, remaining_data} = :gen_tcp.recv(socket, length - byte_size(file_data), 5000)
+              file_data = file_data <> remaining_data
+            end
+            IO.puts("Received RDB file of size #{byte_size(file_data)} bytes")
+            :ok
+          _ ->
+            IO.puts("Invalid RDB format: doesn't start with $")
+            {:error, :invalid_rdb_format}
+        end
+      {:error, reason} ->
+        IO.puts("Error receiving RDB file: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -239,53 +265,53 @@ require Logger
     end
   end
 
-  # defp serve(client, config) do
-  #   try do
-  #     client
-  #     |> read_line()
-  #     |> process_command(client, config)
-
-  #     serve(client, config)
-  #   catch
-  #     kind, reason ->
-  #       {:error, {kind, reason, __STACKTRACE__}}
-  #   end
-  # end
-
   defp serve(client, config) do
-    if is_master_connection?(client, config) do
-      IO.puts("Handling as master connection")
-      handle_master_connection(client)
-    else
-      IO.puts("Handling as client connection")
-      handle_client_connection(client, config)
-    end
-  end
-
-  defp handle_master_connection(client) do
-    case :inet.setopts(client, [active: true]) do
-      :ok ->
-        {:ok, opts} = :inet.getopts(client, [:active])
-        IO.puts("Socket active mode: #{inspect(opts)}")
-        listen_for_master_commands(client)
-      {:error, reason} ->
-        IO.puts("Failed to set socket options: #{inspect(reason)}")
-        # Handle the error appropriately, maybe try to reconnect or exit
-    end
-  end
-
-  defp handle_client_connection(client, config) do
     try do
       client
       |> read_line()
       |> process_command(client, config)
 
-      handle_client_connection(client, config)
+      serve(client, config)
     catch
       kind, reason ->
         {:error, {kind, reason, __STACKTRACE__}}
     end
   end
+
+  # defp serve(client, config) do
+  #   if is_master_connection?(client, config) do
+  #     IO.puts("Handling as master connection")
+  #     handle_master_connection(client)
+  #   else
+  #     IO.puts("Handling as client connection")
+  #     handle_client_connection(client, config)
+  #   end
+  # end
+
+  # defp handle_master_connection(client) do
+  #   case :inet.setopts(client, [active: true]) do
+  #     :ok ->
+  #       {:ok, opts} = :inet.getopts(client, [:active])
+  #       IO.puts("Socket active mode: #{inspect(opts)}")
+  #       listen_for_master_commands(client)
+  #     {:error, reason} ->
+  #       IO.puts("Failed to set socket options: #{inspect(reason)}")
+  #       # Handle the error appropriately, maybe try to reconnect or exit
+  #   end
+  # end
+
+  # defp handle_client_connection(client, config) do
+  #   try do
+  #     client
+  #     |> read_line()
+  #     |> process_command(client, config)
+
+  #     handle_client_connection(client, config)
+  #   catch
+  #     kind, reason ->
+  #       {:error, {kind, reason, __STACKTRACE__}}
+  #   end
+  # end
 
   defp read_line(client) do
     case :gen_tcp.recv(client, 0) do
