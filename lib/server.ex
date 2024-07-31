@@ -75,10 +75,14 @@ require Logger
   # Replicas process
 
   defp perform_handshake(socket, replica_port) do
+    {:ok, state} = :inet.getstat(socket)
+    IO.puts("Socket state before handshake: #{inspect(state)}")
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
          :ok <- send_psync(socket) do
+          {:ok, state} = :inet.getstat(socket)
+          IO.puts("Socket state after handshake: #{inspect(state)}")
       :ok
     else
       {:error, reason} ->
@@ -152,29 +156,33 @@ require Logger
   end
 
   defp listen_for_master_commands(socket, buffer \\ "") do
-    receive do
-      {:tcp, ^socket, data} ->
-        new_buffer = buffer <> data
-        IO.puts("Recived data from the master")
-        case process_master_commands(new_buffer) do
-          {:remainder, rest} -> listen_for_master_commands(socket, rest)
-          :ok -> listen_for_master_commands(socket)
-        end
-      {:tcp_closed, ^socket} ->
-        IO.puts("Connection to master closed")
-      {:tcp_error, ^socket, reason} ->
-        IO.puts("Error in connection to master: #{inspect(reason)}")
-    end
+    IO.puts("Started listening for master commands")
+      receive do
+        {:tcp, ^socket, data} ->
+          new_buffer = buffer <> data
+          IO.puts("Recived data from the master: #{inspect(data)}")
+          case process_master_commands(new_buffer) do
+            {:remainder, rest} -> listen_for_master_commands(socket, rest)
+            :ok -> listen_for_master_commands(socket)
+          end
+        {:tcp_closed, ^socket} ->
+          IO.puts("Connection to master closed")
+        {:tcp_error, ^socket, reason} ->
+          IO.puts("Error in connection to master: #{inspect(reason)}")
+      end
   end
 
   defp process_master_commands(data) do
+    IO.puts("Processing master command: #{inspect(data)}")
     case Server.Protocol.parse(data) do
       {:ok, parsed_data, rest} ->
+        IO.puts("Parsed command: #{inspect(parsed_data)}")
         execute_master_command(parsed_data)
         if rest != "", do: process_master_commands(rest), else: :ok
       {:continuation, _fun} ->
+        IO.puts("Incomplete command, waiting for more data")
         {:remainder, data}
-    end
+  end
   end
 
   defp execute_master_command([command | args]) do
@@ -182,9 +190,12 @@ require Logger
       "SET" ->
         [key, value | rest] = args
         case rest do
-          [expire_command, expire_time] when expire_command in ["EX", "PX"] ->
-            time_ms = if expire_command == "EX", do: String.to_integer(expire_time) * 1000, else: String.to_integer(expire_time)
-            Server.Store.update(key, value, time_ms)
+          [command, time] ->
+            command = String.upcase(to_string(command))
+            if command == "PX" do
+              time_ms = String.to_integer(time)
+              Server.Store.update(key, value, time_ms)
+            end
           [] ->
             Server.Store.update(key, value)
         end
@@ -197,7 +208,7 @@ require Logger
 
   #----------------------------------------------------------------------------------
 
-  # Master Server Code
+  # Server Code
   defp loop_acceptor(socket, config) do
     case :gen_tcp.accept(socket) do
       {:ok, client} ->
@@ -210,10 +221,21 @@ require Logger
 
   defp is_master_connection?(client, config) do
     case :inet.peername(client) do
-      {:ok, {address, _port}} ->
-        IO.puts("Master Connection")
-        address == elem(config.replica_of || {nil, nil}, 0)
-      _ -> false
+      {:ok, {address, port}} ->
+        is_master =
+          case config.replica_of do
+            {_master_host, master_port} ->
+              port == master_port
+            _ ->
+              false
+          end
+
+        IO.puts("Connection check: #{inspect(address)}:#{port} - Is master? #{is_master}")
+        is_master
+
+      _ ->
+        IO.puts("Failed to get peer name")
+        false
     end
   end
 
@@ -232,20 +254,28 @@ require Logger
 
   defp serve(client, config) do
     if is_master_connection?(client, config) do
+      IO.puts("Handling as master connection")
       handle_master_connection(client)
     else
+      IO.puts("Handling as client connection")
       handle_client_connection(client, config)
     end
   end
 
   defp handle_master_connection(client) do
-    :inet.setopts(client, [active: true])
-    listen_for_master_commands(client)
+    case :inet.setopts(client, [active: true]) do
+      :ok ->
+        {:ok, opts} = :inet.getopts(client, [:active])
+        IO.puts("Socket active mode: #{inspect(opts)}")
+        listen_for_master_commands(client)
+      {:error, reason} ->
+        IO.puts("Failed to set socket options: #{inspect(reason)}")
+        # Handle the error appropriately, maybe try to reconnect or exit
+    end
   end
 
   defp handle_client_connection(client, config) do
     try do
-      IO.puts("client connection")
       client
       |> read_line()
       |> process_command(client, config)
