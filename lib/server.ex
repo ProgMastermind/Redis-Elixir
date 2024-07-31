@@ -59,7 +59,7 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             Logger.info("Handshake completed successfully")
-            IO.puts("Process the received data carefully")
+            IO.puts("Process the received data carefully.")
             case receive_rdb_file(socket) do
               # {:ok, :command, command} ->
               #   execute_set_command(command)
