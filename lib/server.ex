@@ -60,11 +60,17 @@ require Logger
           :ok ->
             Logger.info("Handshake completed successfully")
             case receive_rdb_file(socket) do
-              {:ok, :command, command} ->
-                execute_set_command(command)
-                listen_for_master_commands(socket)
+              # {:ok, :command, command} ->
+              #   execute_set_command(command)
+              #   listen_for_master_commands(socket)
               # :ok ->
               #   listen_for_master_commands(socket)
+              {:ok, :commands, commands} ->
+                Enum.each(commands, fn command ->
+                  Logger.info("Executing command: #{inspect(command)}")
+                  execute_set_command(command)
+                end)
+                listen_for_master_commands(socket)
               {:error, reason} ->
                 Logger.error("Failed to receive RDB file: #{inspect(reason)}")
             end
@@ -217,13 +223,13 @@ require Logger
           {:rdb_complete, rdb_data} ->
             Logger.info("Received complete RDB file of size #{byte_size(rdb_data)} bytes")
             {:ok, :rdb_complete, rdb_data}
-          {:command, command} ->
-            Logger.info("Received complete command: #{inspect(command)}")
+          {:commands, commands} ->
+            Logger.info("Received complete command: #{inspect(commands)}")
             # case command do
             #   [_command | args] ->
             #     execute_set_command(args)
             # end
-            {:ok, :command, command}
+            {:ok, :commands, commands}
         end
       {:error, reason} ->
         Logger.error("Error receiving data: #{inspect(reason)}")
@@ -262,21 +268,65 @@ require Logger
     {:continue, data, expected_length}
   end
 
+  # defp parse_command(data) do
+  #   IO.puts("Received data: #{inspect(String.slice(data, 100))}...")
+  #   Logger.debug("Attempting to parse command from data")
+  #   case Server.Protocol.parse(data) do
+  #     {:ok, parsed_command, _rest} ->
+  #       Logger.info("Successfully parsed command: #{inspect(parsed_command)}")
+  #       # case parsed_command do
+  #       #   [_command | args] ->
+  #       #     execute_set_command(args)
+  #       # end
+  #       {:command, parsed_command}
+  #     {:continuation, _} ->
+  #       Logger.debug("Incomplete command, continuing to receive")
+  #       {:continue, data, 0}
+  #   end
+
   defp parse_command(data) do
-    Logger.debug("Attempting to parse command from data")
-    case Server.Protocol.parse(data) do
-      {:ok, parsed_command, _rest} ->
-        Logger.info("Successfully parsed command: #{inspect(parsed_command)}")
-        # case parsed_command do
-        #   [_command | args] ->
-        #     execute_set_command(args)
-        # end
-        {:command, parsed_command}
-      {:continuation, _} ->
-        Logger.debug("Incomplete command, continuing to receive")
-        {:continue, data, 0}
+    Logger.info("Received data: #{inspect(String.slice(data, 0, 90))}...")
+    Logger.debug("Attempting to parse commands from data")
+    case parse_multiple_commands(data, []) do
+      {:ok, commands} ->
+        Logger.info("Successfully parsed commands: #{inspect(commands)}")
+        {:commands, commands}
+      {:continue, remaining_data} ->
+        Logger.debug("Incomplete command(s), continuing to receive")
+        {:continue, remaining_data, 0}
     end
   end
+
+  defp parse_multiple_commands(data, acc) do
+    Logger.debug("Parsing data: #{inspect(data)}")
+    case Server.Protocol.parse(data) do
+      {:ok, parsed_command, rest} ->
+        Logger.debug("Parsed command: #{inspect(parsed_command)}, remaining: #{inspect(rest)}")
+        case parsed_command do
+          [_command | _args] = command ->
+            new_acc = acc ++ [command]
+            if rest == "" do
+              Logger.debug("Finished parsing all commands: #{inspect(new_acc)}")
+              {:ok, new_acc}
+            else
+              parse_multiple_commands(rest, new_acc)
+            end
+          _ ->
+            Logger.warning("Unexpected command format: #{inspect(parsed_command)}")
+            {:ok, acc}
+        end
+      {:continuation, _} ->
+        if acc == [] do
+          Logger.debug("Incomplete data, need more: #{inspect(data)}")
+          {:continue, data}
+        else
+          Logger.debug("Partial parse complete, commands: #{inspect(acc)}")
+          {:ok, acc}
+        end
+    end
+  end
+
+
 
   defp execute_set_command([command | args]) do
     case String.upcase(command) do
