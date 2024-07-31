@@ -248,9 +248,9 @@ require Logger
           Server.Store.update(key, value)
       end
 
-      Server.Commandbuffer.add_command(["SET", key, value | rest])
-      send_buffered_commands_to_replica()
-      {:command, {:ok, "OK"}}
+      # Server.Commandbuffer.add_command(["SET", key, value | rest])
+      # send_buffered_commands_to_replica()
+      # {:command, {:ok, "OK"}}
     catch
       _ ->
         {:command, {:error, "Internal server error"}}
