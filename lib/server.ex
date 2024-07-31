@@ -143,7 +143,7 @@ require Logger
             length = String.to_integer(length_str)
             if byte_size(file_data) < length do
               {:ok, remaining_data} = :gen_tcp.recv(socket, length - byte_size(file_data), 5000)
-              file_data = file_data <> remaining_data
+              _file_data = file_data <> remaining_data
             end
             IO.puts("Received RDB file of size #{byte_size(file_data)} bytes")
             :ok
