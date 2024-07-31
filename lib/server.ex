@@ -58,16 +58,52 @@ require Logger
       {:ok, socket} ->
         case perform_handshake(socket, replica_port) do
           :ok ->
-            IO.puts("Handshake completed successfully")
-            # serve(socket, %{replica_of: {master_host, master_port}})
-          # {:ok, socket}
+            Logger.info("Handshake completed successfully")
+            case receive_rdb_file(socket) do
+              {:ok, :command, command} ->
+                execute_set_command(command)
+                listen_for_master_commands(socket)
+              # :ok ->
+              #   listen_for_master_commands(socket)
+              {:error, reason} ->
+                Logger.error("Failed to receive RDB file: #{inspect(reason)}")
+            end
           {:error, reason} ->
-            IO.puts("Handshake failed: #{inspect(reason)}")
-            # {:error, reason}
+            Logger.error("Handshake failed: #{inspect(reason)}")
         end
       {:error, reason} ->
-        IO.puts("Failed to connect to master: #{inspect(reason)}")
-        {:error, reason}
+        Logger.error("Failed to connect to master: #{inspect(reason)}")
+    end
+  end
+
+  defp listen_for_master_commands(socket) do
+    Logger.info("Listening for commands from master")
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, data} ->
+        process_master_command(data, socket)
+        listen_for_master_commands(socket)
+      {:error, :closed} ->
+        Logger.info("Master connection closed")
+      {:error, reason} ->
+        Logger.error("Error receiving command from master: #{inspect(reason)}")
+    end
+  end
+
+  defp process_master_command(data, socket) do
+    Logger.debug("Received data from master: #{inspect(data)}")
+    case Server.Protocol.parse(data) do
+      {:ok, parsed_command, rest} ->
+        Logger.info("Parsed command from master: #{inspect(parsed_command)}")
+        execute_set_command(parsed_command)
+        if rest != "", do: process_master_command(rest, socket)
+      {:continuation, _} ->
+        Logger.debug("Incomplete command, waiting for more data")
+        case :gen_tcp.recv(socket, 0) do
+          {:ok, more_data} ->
+            process_master_command(data <> more_data, socket)
+          {:error, reason} ->
+            Logger.error("Error receiving additional data: #{inspect(reason)}")
+        end
     end
   end
 
@@ -122,7 +158,7 @@ require Logger
       {:ok, "+FULLRESYNC " <> rest} ->
         [_repl_id, _offset] = String.split(String.trim(rest), " ")
         # Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
-        receive_rdb_file(socket)
+        # receive_rdb_file(socket)
         # start_listening_for_master_commands(socket)
         :ok
       {:ok, response} ->
@@ -183,6 +219,10 @@ require Logger
             {:ok, :rdb_complete, rdb_data}
           {:command, command} ->
             Logger.info("Received complete command: #{inspect(command)}")
+            # case command do
+            #   [_command | args] ->
+            #     execute_set_command(args)
+            # end
             {:ok, :command, command}
         end
       {:error, reason} ->
@@ -227,10 +267,10 @@ require Logger
     case Server.Protocol.parse(data) do
       {:ok, parsed_command, _rest} ->
         Logger.info("Successfully parsed command: #{inspect(parsed_command)}")
-        case parsed_command do
-          [_command | args] ->
-            execute_set_command(args)
-        end
+        # case parsed_command do
+        #   [_command | args] ->
+        #     execute_set_command(args)
+        # end
         {:command, parsed_command}
       {:continuation, _} ->
         Logger.debug("Incomplete command, continuing to receive")
@@ -238,22 +278,19 @@ require Logger
     end
   end
 
-  defp execute_set_command([key, value | rest]) do
-    try do
-      case rest do
-        ["PX", time] ->
-          time_ms = String.to_integer(time)
-          Server.Store.update(key, value, time_ms)
-        [] ->
-          Server.Store.update(key, value)
-      end
-
-      # Server.Commandbuffer.add_command(["SET", key, value | rest])
-      # send_buffered_commands_to_replica()
-      # {:command, {:ok, "OK"}}
-    catch
+  defp execute_set_command([command | args]) do
+    case String.upcase(command) do
+      "SET" ->
+        [key, value | rest] = args
+        case rest do
+          ["PX", time] ->
+            time_ms = String.to_integer(time)
+            Server.Store.update(key, value, time_ms)
+          [] ->
+            Server.Store.update(key, value)
+        end
       _ ->
-        {:command, {:error, "Internal server error"}}
+        Logger.warning("Unhandled command from master: #{command}")
     end
   end
 
