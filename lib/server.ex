@@ -60,11 +60,10 @@ require Logger
           :ok ->
             IO.puts("Handshake completed successfully")
             # serve(socket, %{replica_of: {master_host, master_port}})
-
-          {:ok, socket}
+          # {:ok, socket}
           {:error, reason} ->
             IO.puts("Handshake failed: #{inspect(reason)}")
-            {:error, reason}
+            # {:error, reason}
         end
       {:error, reason} ->
         IO.puts("Failed to connect to master: #{inspect(reason)}")
@@ -81,8 +80,9 @@ require Logger
     with :ok <- send_ping(socket),
          :ok <- send_replconf_listening_port(socket, replica_port),
          :ok <- send_replconf_capa(socket),
-         :ok <- send_psync(socket),
-         :ok <- receive_rdb_file(socket) do
+         :ok <- send_psync(socket) do
+        #  :ok <- receive_rdb_file(socket) do
+        #  :ok <- start_listening_for_master_commands(socket) do
           {:ok, state} = :inet.getstat(socket)
           IO.puts("Socket state after handshake: #{inspect(state)}")
       :ok
@@ -123,6 +123,7 @@ require Logger
         [_repl_id, _offset] = String.split(String.trim(rest), " ")
         # Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
         receive_rdb_file(socket)
+        # start_listening_for_master_commands(socket)
         :ok
       {:ok, response} ->
         IO.puts("Unexpected PSYNC response: #{inspect(response)}")
@@ -137,6 +138,10 @@ require Logger
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, data} ->
         IO.puts("Received data: #{inspect(String.slice(data, 0, 50))}...")  # Log the first 50 chars
+        case Server.Protocol.parse(data) do
+          {:ok, parsed_data, _rest} ->
+            IO.puts("Parsed data: #{inspect(parsed_data)}")  # Debug line
+          end
         case data do
           "$" <> rest ->
             [length_str, file_data] = String.split(rest, "\r\n", parts: 2)
@@ -181,55 +186,6 @@ require Logger
     end
   end
 
-  defp listen_for_master_commands(socket, buffer \\ "") do
-    IO.puts("Started listening for master commands")
-      receive do
-        {:tcp, ^socket, data} ->
-          new_buffer = buffer <> data
-          IO.puts("Recived data from the master: #{inspect(data)}")
-          case process_master_commands(new_buffer) do
-            {:remainder, rest} -> listen_for_master_commands(socket, rest)
-            :ok -> listen_for_master_commands(socket)
-          end
-        {:tcp_closed, ^socket} ->
-          IO.puts("Connection to master closed")
-        {:tcp_error, ^socket, reason} ->
-          IO.puts("Error in connection to master: #{inspect(reason)}")
-      end
-  end
-
-  defp process_master_commands(data) do
-    IO.puts("Processing master command: #{inspect(data)}")
-    case Server.Protocol.parse(data) do
-      {:ok, parsed_data, rest} ->
-        IO.puts("Parsed command: #{inspect(parsed_data)}")
-        execute_master_command(parsed_data)
-        if rest != "", do: process_master_commands(rest), else: :ok
-      {:continuation, _fun} ->
-        IO.puts("Incomplete command, waiting for more data")
-        {:remainder, data}
-  end
-  end
-
-  defp execute_master_command([command | args]) do
-    case String.upcase(to_string(command)) do
-      "SET" ->
-        [key, value | rest] = args
-        case rest do
-          [command, time] ->
-            command = String.upcase(to_string(command))
-            if command == "PX" do
-              time_ms = String.to_integer(time)
-              Server.Store.update(key, value, time_ms)
-            end
-          [] ->
-            Server.Store.update(key, value)
-        end
-      # Add other commands as needed
-      _ ->
-        IO.puts("Unknown command from master: #{command}")
-    end
-  end
 
 
   #----------------------------------------------------------------------------------
@@ -245,25 +201,25 @@ require Logger
     end
   end
 
-  defp is_master_connection?(client, config) do
-    case :inet.peername(client) do
-      {:ok, {address, port}} ->
-        is_master =
-          case config.replica_of do
-            {_master_host, master_port} ->
-              port == master_port
-            _ ->
-              false
-          end
+  # defp is_master_connection?(client, config) do
+  #   case :inet.peername(client) do
+  #     {:ok, {address, port}} ->
+  #       is_master =
+  #         case config.replica_of do
+  #           {_master_host, master_port} ->
+  #             port == master_port
+  #           _ ->
+  #             false
+  #         end
 
-        IO.puts("Connection check: #{inspect(address)}:#{port} - Is master? #{is_master}")
-        is_master
+  #       IO.puts("Connection check: #{inspect(address)}:#{port} - Is master? #{is_master}")
+  #       is_master
 
-      _ ->
-        IO.puts("Failed to get peer name")
-        false
-    end
-  end
+  #     _ ->
+  #       IO.puts("Failed to get peer name")
+  #       false
+  #   end
+  # end
 
   defp serve(client, config) do
     try do
@@ -278,40 +234,6 @@ require Logger
     end
   end
 
-  # defp serve(client, config) do
-  #   if is_master_connection?(client, config) do
-  #     IO.puts("Handling as master connection")
-  #     handle_master_connection(client)
-  #   else
-  #     IO.puts("Handling as client connection")
-  #     handle_client_connection(client, config)
-  #   end
-  # end
-
-  # defp handle_master_connection(client) do
-  #   case :inet.setopts(client, [active: true]) do
-  #     :ok ->
-  #       {:ok, opts} = :inet.getopts(client, [:active])
-  #       IO.puts("Socket active mode: #{inspect(opts)}")
-  #       listen_for_master_commands(client)
-  #     {:error, reason} ->
-  #       IO.puts("Failed to set socket options: #{inspect(reason)}")
-  #       # Handle the error appropriately, maybe try to reconnect or exit
-  #   end
-  # end
-
-  # defp handle_client_connection(client, config) do
-  #   try do
-  #     client
-  #     |> read_line()
-  #     |> process_command(client, config)
-
-  #     handle_client_connection(client, config)
-  #   catch
-  #     kind, reason ->
-  #       {:error, {kind, reason, __STACKTRACE__}}
-  #   end
-  # end
 
   defp read_line(client) do
     case :gen_tcp.recv(client, 0) do
