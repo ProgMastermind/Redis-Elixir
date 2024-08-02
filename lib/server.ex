@@ -382,7 +382,7 @@ require Logger
     Logger.debug("RDB data size: #{byte_size(rdb_data)}, Rest size: #{byte_size(rest)}")
     case rest do
       <<>> ->
-        Logger.info("Completed receiving RDB file")
+        Logger.info("Completed receiving the RDB file")
         {:rdb_complete, rdb_data}
       _ ->
         Logger.info("RDB file complete, parsing remaining data as command")
