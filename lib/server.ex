@@ -480,7 +480,7 @@ require Logger
             Server.Store.update(key, value)
         end
       _ ->
-        Logger.warning("Unhandled command from master: #{command}")
+        Logger.warning("Unhandled command from the master: #{command}")
     end
   end
 
