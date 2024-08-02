@@ -45,7 +45,7 @@ require Logger
     {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true])
 
     if config.replica_of do
-      spawn_link(fn ->
+      spawn(fn ->
          connect_to_master(config.replica_of, config.port)
       end)
     end
@@ -59,22 +59,23 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             Logger.info("Handshake completed successfully")
-            IO.puts("Process the received data carefully")
-            case receive_rdb_file(socket) do
-              # {:ok, :command, command} ->
-              #   execute_set_command(command)
-              #   listen_for_master_commands(socket)
-              # :ok ->
-              #   listen_for_master_commands(socket)
-              {:ok, :commands, commands} ->
-                Enum.each(commands, fn command ->
-                  Logger.info("Executing command: #{inspect(command)}")
-                  execute_set_command(command)
-                end)
-                listen_for_master_commands(socket)
-              {:error, reason} ->
-                Logger.error("Failed to receive RDB file: #{inspect(reason)}")
-            end
+            # IO.puts("Process the received data carefully")
+            # case receive_rdb_file(socket) do
+            #   # {:ok, :command, command} ->
+            #   #   execute_set_command(command)
+            #   #   listen_for_master_commands(socket)
+            #   # :ok ->
+            #   #   listen_for_master_commands(socket)
+            #   {:ok, :rdb_complete, rdb_data} ->
+            #     process_rdb_data(rdb_data)
+            #   {:ok, :commands, commands} ->
+            #     Enum.each(commands, fn command ->
+            #       Logger.info("Executing command: #{inspect(command)}")
+            #       execute_set_command(command)
+            #     end)
+            #   {:error, reason} ->
+            #     Logger.error("Failed to receive RDB file: #{inspect(reason)}")
+            # end
           {:error, reason} ->
             Logger.error("Handshake failed: #{inspect(reason)}")
         end
@@ -83,37 +84,10 @@ require Logger
     end
   end
 
-  defp listen_for_master_commands(socket) do
-    Logger.info("Listening for commands from master")
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, data} ->
-        process_master_command(data, socket)
-        listen_for_master_commands(socket)
-      {:error, :closed} ->
-        Logger.info("Master connection closed")
-      {:error, reason} ->
-        Logger.error("Error receiving command from master: #{inspect(reason)}")
-    end
+  defp process_rdb_data(rdb_data) do
+    Logger.info("Processing RDB data of size: #{byte_size(rdb_data)} bytes")
+    # Implement RDB processing logic here
   end
-
-  defp process_master_command(data, socket) do
-    Logger.debug("Received data from master: #{inspect(data)}")
-    case Server.Protocol.parse(data) do
-      {:ok, parsed_command, rest} ->
-        Logger.info("Parsed command from master: #{inspect(parsed_command)}")
-        execute_set_command(parsed_command)
-        if rest != "", do: process_master_command(rest, socket)
-      {:continuation, _} ->
-        Logger.debug("Incomplete command, waiting for more data")
-        case :gen_tcp.recv(socket, 0) do
-          {:ok, more_data} ->
-            process_master_command(data <> more_data, socket)
-          {:error, reason} ->
-            Logger.error("Error receiving additional data: #{inspect(reason)}")
-        end
-    end
-  end
-
   # ------------------------------------------------------------------------
   # Replicas process
 
@@ -161,21 +135,148 @@ require Logger
   end
 
   defp receive_psync_response(socket) do
-    case :gen_tcp.recv(socket, 0, 5000) do
-      {:ok, "+FULLRESYNC " <> rest} ->
-        [_repl_id, _offset] = String.split(String.trim(rest), " ")
-        # Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
-        # receive_rdb_file(socket)
-        # start_listening_for_master_commands(socket)
-        :ok
-      {:ok, response} ->
-        IO.puts("Unexpected PSYNC response: #{inspect(response)}")
-        {:error, :unexpected_response}
+    # this is original one
+    # case :gen_tcp.recv(socket, 0, 5000) do
+    #   {:ok, "+FULLRESYNC " <> rest} ->
+    #     [_repl_id, _offset] = String.split(String.trim(rest), " ")
+    #     # Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
+
+    #     case receive_rdb_file(socket) do
+    #       {:ok, :rdb_complete, rdb_data} ->
+    #         process_rdb_data(rdb_data)
+    #       {:ok, :commands, commands} ->
+    #         Enum.each(commands, fn command ->
+    #           Logger.info("Executing command: #{inspect(command)}")
+    #           execute_set_command(command)
+    #         end)
+    #       {:error, reason} ->
+    #         Logger.error("Failed to receive RDB file: #{inspect(reason)}")
+    #     end
+    #     :ok
+    #   {:ok, response} ->
+    #     IO.puts("Unexpected PSYNC response: #{inspect(response)}")
+    #     {:error, :unexpected_response}
+      # {:error, reason} ->
+      #   IO.puts("Error receiving PSYNC response: #{inspect(reason)}")
+      #   {:error, reason}
+
+      #-------------------------------------------------------------
+    # this if for checking raw data
+    # case :gen_tcp.recv(socket, 0, 5000) do
+    #   {:ok, data} ->
+    #     # Logger.debug("Received PSYNC response: #{inspect(data, limit: :infinity, binaries: :as_binaries)}")
+    #     # Logger.debug("Received PSYNC response: #{Base.encode16(data)}")
+    #     Logger.debug("Received PSYNC response: #{inspect(data)}")
+    #     case data do
+    #       "+FULLRESYNC " <> rest ->
+    #         [repl_id, offset] = String.split(String.trim(rest), " ")
+    #         Logger.debug("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
+    #         case receive_rdb_file(socket) do
+    #           {:ok, :rdb_complete, rdb_data} ->
+    #             process_rdb_data(rdb_data)
+    #           {:ok, :commands, commands} ->
+    #             Enum.each(commands, fn command ->
+    #               Logger.info("Executing command: #{inspect(command)}")
+    #               execute_set_command(command)
+    #             end)
+    #           {:error, reason} ->
+    #             Logger.error("Failed to receive RDB file: #{inspect(reason)}")
+    #         end
+    #         :ok
+    #       other ->
+    #         Logger.warning("Unexpected PSYNC response: #{inspect(other)}")
+    #         {:error, :unexpected_response}
+    #     end
+    #   {:error, reason} ->
+    #     Logger.error("Error receiving PSYNC response: #{inspect(reason)}")
+    #     {:error, reason}
+    # end
+
+    #---------------------------------------------------------------
+    #now this is for checking data which comes with header
+
+    case :gen_tcp.recv(socket, 0, :infinity) do
+      {:ok, data} ->
+        Logger.debug("Received PSYNC response: #{inspect(data)}")
+        case parse_psync_response(data) do
+          {:ok, repl_id, offset, remaining_data} ->
+            Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}, Remaining Data: #{remaining_data}")
+
+            if remaining_data != "" do
+              case parse_data(remaining_data, 0) do
+                {:rdb_complete, rdb_data} ->
+                  Logger.info("Received complete RDB file of size #{byte_size(rdb_data)} bytes")
+                  {:commands, commands} ->
+                    Enum.each(commands, fn command ->
+                      Logger.info("Executing command: #{inspect(command)}")
+                      execute_replica_command(socket, command)
+                    end)
+                  {:error, reason} ->
+                    Logger.error("Failed to receive RDB file: #{inspect(reason)}")
+                  end
+            end
+
+            # case receive_rdb_file(socket) do
+            #   {:ok, :rdb_complete, rdb_data} ->
+            #     process_rdb_data(rdb_data)
+            #   {:ok, :commands, commands} ->
+            #     Enum.each(commands, fn command ->
+            #       Logger.info("Executing command: #{inspect(command)}")
+            #       execute_set_command(command)
+            #     end)
+            #   {:error, reason} ->
+            #     Logger.error("Failed to receive RDB file: #{inspect(reason)}")
+            # end
+
+            :ok
+          {:error, reason} ->
+            Logger.warning("Error parsing PSYNC response: #{reason}")
+            {:error, reason}
+        end
+
       {:error, reason} ->
-        IO.puts("Error receiving PSYNC response: #{inspect(reason)}")
+        Logger.error("Error receiving PSYNC response: #{inspect(reason)}")
         {:error, reason}
     end
+
   end
+
+  # defp parse_psync_response(data) do
+  #   case Regex.run(~r/^\+FULLRESYNC (\S+) (\d+)/, data) do
+  #     [_, repl_id, offset_str] ->
+  #       offset = String.to_integer(offset_str)
+  #       remaining = String.replace(data, ~r/^\+FULLRESYNC \S+ \d+/, "")
+  #       {:ok, repl_id, offset, remaining}
+
+  #     nil ->
+  #       {:error, :invalid_psync_response}
+  #   end
+  # end
+
+
+  defp parse_psync_response(data) do
+    parts = String.split(data, "\r\n", parts: 2)
+
+    case parts do
+      [psync_part, rdb_part] ->
+        parse_psync_part(psync_part, rdb_part)
+      [psync_part] ->
+        parse_psync_part(psync_part, "")
+      _ ->
+        {:error, :invalid_psync_response}
+    end
+  end
+
+  defp parse_psync_part(psync_part, rdb_part) do
+    case Regex.run(~r/^\+FULLRESYNC (\S+) (\d+)$/, psync_part, capture: :all_but_first) do
+      [repl_id, offset_str] ->
+        offset = String.to_integer(offset_str)
+        {:ok, repl_id, offset, rdb_part}
+      nil ->
+        {:error, :invalid_psync_response}
+    end
+  end
+
 
   # defp receive_rdb_file(socket) do
   #   case :gen_tcp.recv(socket, 0, 5000) do
@@ -205,16 +306,26 @@ require Logger
   #   end
   # end
 
+  # ---------------------------------------------------------------
+  # Main working receive_rdb
   defp receive_rdb_file(socket) do
     Logger.info("Starting to receive data from socket")
     receive_data(socket, "", 0)
   end
 
+  # defp receive_rdb_file(socket, initial_data) do
+  #   Logger.info("Starting to receive data from socket")
+  #   receive_data(socket, initial_data, 0)
+  # end
+
   defp receive_data(socket, buffer, expected_length) do
     Logger.debug("Receiving data. Buffer size: #{byte_size(buffer)}, Expected length: #{expected_length}")
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, data} ->
+        Logger.debug("Received raw bytes: #{inspect(data, limit: :infinity, binaries: :as_binaries)}")
         Logger.debug("Received chunk of size: #{byte_size(data)} bytes")
+        Logger.debug("Received data (as string): #{inspect(data, charlists: :as_lists)}")
+        Logger.info("Received data: #{inspect(String.slice(data, 0, 100))}...")
         new_buffer = buffer <> data
         Logger.debug("New buffer size: #{byte_size(new_buffer)} bytes")
         case parse_data(new_buffer, expected_length) do
@@ -251,15 +362,31 @@ require Logger
     end
   end
 
+  # defp parse_data(data, expected_length) when byte_size(data) >= expected_length do
+  #   Logger.debug("Received enough data to potentially complete RDB or command")
+  #   <<rdb_data::binary-size(expected_length), rest::binary>> = data
+  #   case rest do
+  #     "" ->
+  #       Logger.info("Completed receiving RDB file")
+  #       {:rdb_complete, rdb_data}
+  #     _ ->
+  #       Logger.info("RDB file complete, parsing remaining data as command")
+  #       parse_command(rest)
+  #   end
+  # end
+
   defp parse_data(data, expected_length) when byte_size(data) >= expected_length do
     Logger.debug("Received enough data to potentially complete RDB or command")
+    Logger.debug("Data size: #{byte_size(data)}, Expected length: #{expected_length}")
     <<rdb_data::binary-size(expected_length), rest::binary>> = data
+    Logger.debug("RDB data size: #{byte_size(rdb_data)}, Rest size: #{byte_size(rest)}")
     case rest do
-      "" ->
+      <<>> ->
         Logger.info("Completed receiving RDB file")
         {:rdb_complete, rdb_data}
       _ ->
         Logger.info("RDB file complete, parsing remaining data as command")
+        Logger.debug("Remaining data: #{inspect(rest)}")
         parse_command(rest)
     end
   end
@@ -269,21 +396,6 @@ require Logger
     {:continue, data, expected_length}
   end
 
-  # defp parse_command(data) do
-  #   IO.puts("Received data: #{inspect(String.slice(data, 100))}...")
-  #   Logger.debug("Attempting to parse command from data")
-  #   case Server.Protocol.parse(data) do
-  #     {:ok, parsed_command, _rest} ->
-  #       Logger.info("Successfully parsed command: #{inspect(parsed_command)}")
-  #       # case parsed_command do
-  #       #   [_command | args] ->
-  #       #     execute_set_command(args)
-  #       # end
-  #       {:command, parsed_command}
-  #     {:continuation, _} ->
-  #       Logger.debug("Incomplete command, continuing to receive")
-  #       {:continue, data, 0}
-  #   end
 
   defp parse_command(data) do
     Logger.info("Received data: #{inspect(String.slice(data, 0, 90))}...")
@@ -327,7 +439,34 @@ require Logger
     end
   end
 
+  #----------------------------------------------------------------------------------
 
+
+  #---------------------------------------------------------
+  # ACK Commands
+
+  defp execute_replica_command(socket, command) do
+    case command do
+      ["SET" | args] ->
+        execute_set_command(["SET" | args])
+      ["REPLCONF", "GETACK", "*"] ->
+        send_replconf_ack(socket)
+      _ ->
+        Logger.warning("Unhandled command from master: #{inspect(command)}")
+    end
+  end
+
+  # defp execute_replica_command(socket, ["SET" | args]) do
+  #   execute_set_command(["SET" | args])
+  # end
+
+  # defp execute_replica_command(socket, ["REPLCONF", "GETACK", "*"]) do
+  #   send_replconf_ack(socket)
+  # end
+
+  # defp execute_replica_command(socket, command) do
+  #   Logger.warning("Unhandled command from master: #{inspect(command)}")
+  # end
 
   defp execute_set_command([command | args]) do
     case String.upcase(command) do
@@ -345,6 +484,20 @@ require Logger
     end
   end
 
+  defp send_replconf_ack(socket) do
+    ack_command = ["REPLCONF", "ACK", "0"]
+    packed_command = Server.Protocol.pack(ack_command) |> IO.iodata_to_binary()
+    case :gen_tcp.send(socket, packed_command) do
+      :ok ->
+        Logger.info("Sent REPLCONF ACK 0 to master")
+      {:error, reason} ->
+        Logger.error("Failed to send REPLCONF ACK: #{inspect(reason)}")
+    end
+  end
+
+  #-----------------------------------------------------------------
+
+
   defp send_command(socket, command, expected_response) do
     packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
     case :gen_tcp.send(socket, packed_command) do
@@ -357,18 +510,31 @@ require Logger
   end
 
   defp receive_response(socket, expected_response) do
+    # case :gen_tcp.recv(socket, 0, 5000) do
+    #   {:ok, ^expected_response} ->
+    #     :ok
+    #   {:ok, response} ->
+    #     IO.puts("Unexpected response: #{inspect(response)}")
+    #     {:error, :unexpected_response}
+    #   {:error, reason} ->
+    #     IO.puts("Error receiving response: #{inspect(reason)}")
+    #     {:error, reason}
+    # end
     case :gen_tcp.recv(socket, 0, 5000) do
-      {:ok, ^expected_response} ->
-        :ok
-      {:ok, response} ->
-        IO.puts("Unexpected response: #{inspect(response)}")
-        {:error, :unexpected_response}
+      {:ok, received_data} ->
+        Logger.debug("Received raw bytes: #{inspect(received_data, limit: :infinity, binaries: :as_binaries)}")
+        if received_data == expected_response do
+          Logger.debug("Received expected response")
+          :ok
+        else
+          Logger.warning("Unexpected response. Expected: #{inspect(expected_response)}, Received: #{inspect(received_data)}")
+          {:error, :unexpected_response}
+        end
       {:error, reason} ->
-        IO.puts("Error receiving response: #{inspect(reason)}")
+        Logger.error("Error receiving response: #{inspect(reason)}")
         {:error, reason}
     end
   end
-
 
 
   #----------------------------------------------------------------------------------
@@ -468,8 +634,11 @@ require Logger
 
   defp send_buffered_commands_to_replica do
     commands = Server.Commandbuffer.get_and_clear_commands()
-    IO.puts("Expected Propagated Commands: #{inspect(commands)}")
+    # IO.puts("Expected Propagated Commands: #{inspect(commands)}")
     clients = Server.Clientbuffer.get_clients()
+
+    Logger.debug("Sending buffered commands to replicas: #{inspect(commands)}")
+    Logger.debug("Number of clients: #{length(clients)}")
 
     Enum.each(clients, fn client ->
       Enum.each(commands, fn command ->
@@ -567,9 +736,15 @@ require Logger
       end
 
       write_line("+OK\r\n", client)
-      Server.Commandbuffer.add_command(["SET", key, value | rest])
 
+      Server.Commandbuffer.add_command(["SET", key, value | rest])
       send_buffered_commands_to_replica()
+
+      # Task.start(fn ->
+      #   Server.Commandbuffer.add_command(["SET", key, value | rest])
+      #   send_buffered_commands_to_replica()
+      # end)
+
       :ok
     catch
       _ ->
@@ -587,6 +762,19 @@ require Logger
 
       {:error, _reason} ->
         write_line("$-1\r\n", client)
+    end
+  end
+
+  defp execute_command("REPLCONF", args, _client) do
+    Logger.info("Received REPLCONF with args: #{inspect(args)}")
+    case args do
+      ["ACK", offset] ->
+        # Handle ACK from replica
+        Logger.info("Received ACK from replica with offset: #{offset}")
+        :ok
+      _ ->
+        # Handle other REPLCONF subcommands if needed
+        :ok
     end
   end
 
