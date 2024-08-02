@@ -452,7 +452,7 @@ require Logger
       ["REPLCONF", "GETACK", "*"] ->
         send_replconf_ack(socket)
       _ ->
-        Logger.warning("Unhandled command from master: #{inspect(command)}")
+        Logger.warning("Unhandled command from master : #{inspect(command)}")
     end
   end
 
