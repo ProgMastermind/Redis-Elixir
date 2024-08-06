@@ -63,9 +63,7 @@ require Logger
         case perform_handshake(socket, replica_port) do
           :ok ->
             Logger.info("Handshake completed successfully")
-            # handle_rdb_and_commands(socket)
-            # handle_commands(socket)
-            # {:ok, socket}
+            parse_commands(socket)
           {:error, reason} ->
             Logger.error("Handshake failed: #{inspect(reason)}")
         end
@@ -180,7 +178,8 @@ require Logger
       {:ok, rdb_data} ->
         Logger.info("RDB data received, length: #{byte_size(rdb_data)}")
         # Process RDB data here if needed
-        parse_commands(socket)
+        # parse_commands(socket)
+        :ok
       {:error, reason} ->
         Logger.error("Error reading RDB: #{inspect(reason)}")
         {:error, reason}
@@ -585,23 +584,6 @@ require Logger
     end
   end
 
-  # defp execute_replica_command(_socket, ["SET" | args], command_bytes) do
-  #   Server.Bytes.increment_offset(command_bytes)
-  #   execute_set_command(["SET" | args])
-  # end
-
-  # defp execute_replica_command(socket, ["REPLCONF", "GETACK", "*"], command_bytes) do
-  #   send_replconf_ack(socket, command_bytes)
-  # end
-
-  # defp execute_replica_command(_socket, ["PING"], command_bytes) do
-  #   Server.Bytes.increment_offset(command_bytes)
-  #   # Logger.info("Processed command: #{inspect(command)}, incremented offset by #{command_bytes}")
-  # end
-
-  # defp execute_replica_command(_socket, command, _command_bytes) do
-  #   Logger.warning("Unhandled command from master: #{inspect(command)}")
-  # end
 
   defp execute_set_command([command | args]) do
     case String.upcase(command) do
@@ -630,10 +612,6 @@ require Logger
       {:error, reason} ->
         Logger.error("Failed to send REPLCONF ACK: #{inspect(reason)}")
     end
-    # Server.Bytes.increment_offset(37)
-    # Server.Bytes.increment_offset(command_bytes)
-    # offer = Server.Bytes.get_offset()
-    # Logger.info("Stored Bytes: #{offer}")
   end
   #-----------------------------------------------------------------
 
@@ -896,6 +874,11 @@ require Logger
       {:error, _reason} ->
         write_line("$-1\r\n", client)
     end
+  end
+
+  defp execute_command("WAIT", _args, client) do
+    Logger.info("sending reply to the client")
+    write_line(":0\r\n", client)
   end
 
   # defp execute_command("REPLCONF", args, _client) do
