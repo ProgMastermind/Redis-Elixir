@@ -878,7 +878,8 @@ require Logger
 
   defp execute_command("WAIT", _args, client) do
     Logger.info("sending reply to the client")
-    write_line(":0\r\n", client)
+    replica_count = Server.Clientbuffer.get_client_count();
+    write_line(":#{replica_count}\r\n", client)
   end
 
   # defp execute_command("REPLCONF", args, _client) do
