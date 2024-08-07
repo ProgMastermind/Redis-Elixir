@@ -15,6 +15,8 @@ require Logger
       Server.Commandbuffer,
       Server.Clientbuffer,
       Server.Bytes,
+      Server.Acknowledge,
+      Server.Pendingwrites,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -113,48 +115,6 @@ require Logger
   end
 
 
-  #second one
-  # defp receive_psync_response(socket) do
-  #   case read_until_delimiter(socket, "\r\n") do
-  #     {:ok, data} ->
-  #       Logger.debug("Received PSYNC response: #{inspect(data)}")
-  #       case parse_psync_response(data) do
-  #         {:ok, repl_id, offset, remaining_data} ->
-  #           Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}, Remaining Data: #{remaining_data}")
-  #           handle_rdb_and_commands(socket)
-  #           :ok
-  #         {:error, reason} ->
-  #           Logger.warning("Error parsing PSYNC response: #{reason}")
-  #           {:error, reason}
-  #       end
-  #     {:error, reason} ->
-  #       Logger.error("Error receiving PSYNC response: #{inspect(reason)}")
-  #       {:error, reason}
-  #   end
-  # end
-
-  # third one
-  # defp receive_psync_response(socket) do
-  #   case read_until_delimiter(socket, "\r\n") do
-  #     {:ok, data, rest, bytes_read} ->
-  #       Logger.debug("Received PSYNC response: #{inspect(data)}, bytes read: #{bytes_read}")
-
-  #       case parse_psync_response(data) do
-  #         {:ok, repl_id, offset, _remaining_data} ->
-  #           Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
-  #           handle_rdb_and_commands(socket, rest)
-  #           :ok
-  #         {:error, reason} ->
-  #           Logger.warning("Error parsing PSYNC response: #{reason}")
-  #           {:error, reason}
-  #       end
-  #     {:error, reason} ->
-  #       Logger.error("Error receiving PSYNC response: #{inspect(reason)}")
-  #       {:error, reason}
-  #   end
-  # end
-
-  #fouth one
   defp receive_psync_response(socket) do
     case :gen_tcp.recv(socket, 56, 5000) do
       {:ok, data} ->
@@ -177,8 +137,6 @@ require Logger
     case :gen_tcp.recv(socket, 93, 5000) do
       {:ok, rdb_data} ->
         Logger.info("RDB data received, length: #{byte_size(rdb_data)}")
-        # Process RDB data here if needed
-        # parse_commands(socket)
         :ok
       {:error, reason} ->
         Logger.error("Error reading RDB: #{inspect(reason)}")
@@ -248,9 +206,6 @@ require Logger
 
 
   #-------------------------------------------------------------
-
-
-
   defp parse_psync_response(data) do
     parts = String.split(data, "\r\n", parts: 2)
 
@@ -274,299 +229,6 @@ require Logger
     end
   end
 
-
-
-
-  # # #-------------------------------------------------------------------
-  # defp handle_commands(socket) do
-  #   case read_command(socket) do
-  #     {:ok, command} ->
-  #       Logger.info("Received command: #{inspect(command)}")
-  #       # Server.Bytes.increment_offset(bytes_read)
-  #       execute_replica_command(socket, command)
-  #       handle_commands(socket)
-  #     {:error, :timeout}->
-  #       Logger.warning("Timeout while reading command")
-  #       handle_commands(socket)
-  #     {:error, :closed} ->
-  #       Logger.info("Connection closed")
-  #       :ok
-  #     {:error, reason} ->
-  #       Logger.error("Error reading command: #{inspect(reason)}")
-  #       {:error, reason}
-  #   end
-  # end
-
-
-  # defp read_command(socket) do
-  #   case read_until_delimiter(socket, "\r\n") do
-  #     {:ok, "*" <> num_args_str} ->
-  #       num_args = String.to_integer(num_args_str)
-  #       read_args(socket, num_args, [])
-  #     {:error, reason} ->
-  #       {:error, reason}
-  #   end
-  # end
-
-  # defp read_args(_socket, 0, acc), do: {:ok, Enum.reverse(acc)}
-  # defp read_args(socket, num_args, acc) do
-  #   case read_until_delimiter(socket, "\r\n") do
-  #     {:ok, "$" <> len_str} ->
-  #       len = String.to_integer(len_str)
-  #       case read_exact(socket, len) do
-  #         {:ok, arg} ->
-  #           case read_until_delimiter(socket, "\r\n") do
-  #             {:ok, ""} ->
-  #               read_args(socket, num_args - 1, [arg | acc])
-  #             {:error, reason} ->
-  #               {:error, reason}
-  #           end
-  #         {:error, reason} ->
-  #           {:error, reason}
-  #       end
-  #     {:error, reason} ->
-  #       {:error, reason}
-  #   end
-  # end
-
-  # defp read_until_delimiter(socket, delimiter) do
-  #   read_until_delimiter(socket, delimiter, "")
-  # end
-
-  # defp read_until_delimiter(socket, delimiter, acc) do
-  #   case :gen_tcp.recv(socket, 0, 5000) do
-  #     {:ok, data} ->
-  #       new_acc = acc <> data
-  #       case String.split(new_acc, delimiter, parts: 2) do
-  #         [result, rest] ->
-  #           :gen_tcp.unrecv(socket, rest)
-  #           {:ok, result}
-  #         [_] ->
-  #           read_until_delimiter(socket, delimiter, new_acc)
-  #       end
-  #     {:error, :timeout} ->
-  #       {:error, :timeout}
-  #     {:error, reason} ->
-  #       {:error, reason}
-  #   end
-  # end
-
-  # defp read_exact(socket, length) do
-  #   :gen_tcp.recv(socket, length, 5000)
-  # end
-  #--------------------------------------------------------------------------
-   # checking without unrecv operation
-
-  #  defp handle_rdb_and_commands(socket) do
-  #   case read_rdb(socket) do
-  #     {:ok, rdb_data} ->
-  #       Logger.info("Received complete RDB file of size #{byte_size(rdb_data)} bytes")
-  #       # Process RDB data here if needed
-  #       # handle_commands(socket)
-  #       :ok
-  #       {:error, :closed} ->
-  #         Logger.debug("Connection closed")
-  #         :ok
-  #       {:error, reason} ->
-  #         Logger.error("Error reading command: #{inspect(reason)}")
-  #   end
-  # end
-
-  #  defp read_rdb(socket) do
-  #   case read_until_delimiter(socket, "\r\n") do
-  #     {:ok, "$" <> size_str, _bytes_read} ->
-  #       size = String.to_integer(size_str)
-  #       read_exact(socket, size)
-  #     {:error, reason} ->
-  #       {:error, reason}
-  #   end
-  # end
-
-  # defp handle_commands(socket) do
-  #   case read_command(socket) do
-  #     {:ok, command, command_bytes} ->
-  #       Logger.info("Received command: #{inspect(command)}, total bytes: #{command_bytes}")
-  #       execute_replica_command(socket, command, command_bytes)
-  #       handle_commands(socket)
-  #     {:error, :closed} ->
-  #       Logger.info("Connection closed")
-  #       :ok
-  #     {:error, :timeout} ->
-  #       handle_commands(socket)
-  #     {:error, reason} ->
-  #       Logger.error("Error reading command: #{inspect(reason)}")
-  #       {:error, reason}
-  #   end
-  # end
-
-  # defp read_command(socket) do
-  #   Logger.debug("Starting to read command")
-  #   case read_until_delimiter(socket, "\r\n") do
-  #     {:ok, "*" <> num_args_str, first_line_bytes} ->
-  #       num_args = String.to_integer(num_args_str)
-  #       # Logger.debug("Command header: *#{num_args}, bytes: #{first_line_bytes}")
-  #       read_command_args(socket, num_args, [], first_line_bytes)
-  #     {:error, :timeout} ->
-  #       {:error, :timeout}
-  #       {:error, reason} ->
-  #         Logger.error("Error reading command header: #{inspect(reason)}")
-  #         {:error, reason}
-  #   end
-  # end
-
-  # defp read_command_args(_socket, 0, acc, total_bytes) do
-  #   Logger.debug("Finished reading all arguments. Total bytes: #{total_bytes}")
-  #   {:ok, Enum.reverse(acc), total_bytes}
-  # end
-  # defp read_command_args(socket, num_args, acc, total_bytes) do
-  #   # Logger.debug("Reading argument #{length(acc) + 1} of #{num_args + length(acc)}")
-  #   case read_until_delimiter(socket, "\r\n") do
-  #     {:ok, "$" <> len_str, bytes_read} ->
-  #       len = String.to_integer(len_str)
-  #       # Logger.debug("Argument length indicator: $#{len}, bytes: #{bytes_read}")
-  #       case read_exact(socket, len) do
-  #         {:ok, arg} ->
-  #           # Logger.debug("Read argument: #{inspect(arg)}, bytes: #{len}")
-  #           case read_until_delimiter(socket, "\r\n") do
-  #             {:ok, "", more_bytes} ->
-  #               new_total = total_bytes + bytes_read + len + more_bytes
-  #               Logger.debug("Argument total bytes: #{new_total - total_bytes}")
-  #               read_command_args(socket, num_args - 1, [arg | acc], new_total)
-  #             {:error, reason} ->
-  #               Logger.error("Error reading argument delimiter: #{inspect(reason)}")
-  #               {:error, reason}
-  #           end
-  #         {:error, reason} ->
-  #           Logger.error("Error reading argument content: #{inspect(reason)}")
-  #           {:error, reason}
-  #       end
-  #     {:error, reason} ->
-  #       Logger.error("Error reading argument length: #{inspect(reason)}")
-  #       {:error, reason}
-  #   end
-  # end
-
-  # defp read_until_delimiter(socket, delimiter) do
-  #   # Logger.debug("Reading until delimiter: #{inspect(delimiter)}")
-  #   read_until_delimiter(socket, delimiter, "", 0)
-  # end
-
-  # defp read_until_delimiter(socket, delimiter, acc, bytes_read) do
-  #   case :gen_tcp.recv(socket, 0, 1000) do
-  #     {:ok, data} ->
-  #       Logger.debug("Received data chunk: #{inspect(data)}, bytes: #{byte_size(data)}")
-  #       new_acc = acc <> data
-  #       new_bytes_read = bytes_read + byte_size(data)
-  #       case String.split(new_acc, delimiter, parts: 2) do
-  #         [result, rest] ->
-  #           # Logger.debug("Found delimiter. Result: #{inspect(result)}, remaining: #{byte_size(rest)} bytes")
-  #           :gen_tcp.unrecv(socket, rest)
-  #           {:ok, result, new_bytes_read - byte_size(rest)}
-  #         [_] ->
-  #           Logger.debug("Delimiter not found, continuing to read")
-  #           read_until_delimiter(socket, delimiter, new_acc, new_bytes_read)
-  #       end
-  #     {:error, reason} ->
-  #       Logger.error("Error receiving data: #{inspect(reason)}")
-  #       {:error, reason}
-  #   end
-  # end
-
-  # defp read_exact(socket, length) do
-  #   Logger.debug("Reading exact #{length} bytes")
-  #   case :gen_tcp.recv(socket, length) do
-  #     {:ok, data} ->
-  #       Logger.debug("Read exact data: #{inspect(data)}")
-  #       {:ok, data}
-  #     {:error, reason} ->
-  #       Logger.error("Error reading exact bytes: #{inspect(reason)}")
-  #       {:error, reason}
-  #   end
-  # end
-  #--------------------------------------------------------------------------
-
-  #--------------------------------------------------------------------
-  defp read_until_delimiter(socket, delimiter, acc \\ "", bytes_read \\ 0) do
-    case :gen_tcp.recv(socket, 0, 5000) do  # Add a timeout to prevent infinite waiting
-      {:ok, data} ->
-        Logger.debug("Received data chunk: #{inspect(data)}, bytes: #{byte_size(data)}")
-        new_acc = acc <> data
-        new_bytes_read = bytes_read + byte_size(data)
-        case String.split(new_acc, delimiter, parts: 2) do
-          [result, rest] ->
-            Logger.debug("Found delimiter. Result: #{inspect(result)}, remaining: #{byte_size(rest)} bytes")
-            {:ok, result, rest, new_bytes_read - byte_size(rest)}
-          [_] ->
-            Logger.debug("Delimiter not found, continuing to read")
-            read_until_delimiter(socket, delimiter, new_acc, new_bytes_read)
-        end
-      {:error, reason} ->
-        Logger.error("Error receiving data: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp read_command(socket, rest) do
-    Logger.debug("Starting to read command")
-    case read_until_delimiter(socket, "\r\n", rest) do
-      {:ok, "*" <> num_args_str, new_rest, first_line_bytes} ->
-        num_args = String.to_integer(num_args_str)
-        read_command_args(socket, num_args, [], first_line_bytes, new_rest)
-      {:error, :timeout} ->
-        {:error, :timeout}
-      {:error, reason} ->
-        Logger.error("Error reading command header: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp read_command_args(_socket, 0, acc, total_bytes, _rest) do
-    Logger.debug("Finished reading all arguments. Total bytes: #{total_bytes}")
-    {:ok, Enum.reverse(acc), total_bytes}
-  end
-
-  defp read_command_args(socket, num_args, acc, total_bytes, rest) do
-    case read_until_delimiter(socket, "\r\n", rest) do
-      {:ok, "$" <> len_str, new_rest, bytes_read} ->
-        len = String.to_integer(len_str)
-        case read_exact(socket, len, new_rest) do
-          {:ok, arg, remaining} ->
-            case read_until_delimiter(socket, "\r\n", remaining) do
-              {:ok, "", final_rest, more_bytes} ->
-                new_total = total_bytes + bytes_read + len + more_bytes
-                Logger.debug("Argument total bytes: #{new_total - total_bytes}")
-                read_command_args(socket, num_args - 1, [arg | acc], new_total, final_rest)
-              {:error, reason} ->
-                Logger.error("Error reading argument delimiter: #{inspect(reason)}")
-                {:error, reason}
-            end
-          {:error, reason} ->
-            Logger.error("Error reading argument content: #{inspect(reason)}")
-            {:error, reason}
-        end
-      {:error, reason} ->
-        Logger.error("Error reading argument length: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp read_exact(socket, length, buffer) do
-    if byte_size(buffer) >= length do
-      <<value::binary-size(length), rest::binary>> = buffer
-      {:ok, value, rest}
-    else
-      case :gen_tcp.recv(socket, length - byte_size(buffer), 5000) do
-        {:ok, data} ->
-          new_buffer = buffer <> data
-          <<value::binary-size(length), rest::binary>> = new_buffer
-          {:ok, value, rest}
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
-
-  #------------------------------------------------------------------------
 
   #---------------------------------------------------------
   # ACK Commands
@@ -769,12 +431,6 @@ require Logger
     write_line(packed_response, client)
   end
 
-  # defp execute_command("REPLCONF", args, client) do
-  #   IO.puts("Received REPLCONF with args: #{inspect(args)}")
-
-  #   message = "+OK\r\n"
-  #   write_line(message, client)
-  # end
 
   defp execute_command("REPLCONF", args, client) do
     Logger.info("Received REPLCONF with args: #{inspect(args)}")
@@ -792,7 +448,10 @@ require Logger
 
       ["ACK", offset] ->
         # Handle ACK from replica
+        Server.Acknowledge.increment_ack_count();
         Logger.info("Received ACK from replica with offset: #{offset}")
+        count = Server.Acknowledge.get_ack_count();
+        Logger.info("Received acknowledgement from #{count} replicas")
         # You might want to update some internal state here
         :ok
 
@@ -851,6 +510,7 @@ require Logger
           Server.Store.update(key, value)
       end
 
+      Server.Pendingwrites.set_pending_writes()
       write_line("+OK\r\n", client)
 
       Server.Commandbuffer.add_command(["SET", key, value | rest])
@@ -876,24 +536,50 @@ require Logger
     end
   end
 
-  defp execute_command("WAIT", _args, client) do
-    Logger.info("sending reply to the client")
-    replica_count = Server.Clientbuffer.get_client_count();
-    write_line(":#{replica_count}\r\n", client)
+  # defp execute_command("WAIT", _args, client) do
+  #   Logger.info("sending reply to the client")
+  #   replica_count = Server.Clientbuffer.get_client_count();
+  #   write_line(":#{replica_count}\r\n", client)
+  # end
+
+  defp execute_command("WAIT", [count, timeout], client) do
+    Logger.info("Wait command is triggering")
+    timeout = String.to_integer(timeout)
+
+    if Server.Pendingwrites.pending_writes?() do
+      Server.Acknowledge.reset_ack_count()
+
+      Server.Clientbuffer.get_clients()
+      |> Enum.each(fn replica_socket ->
+        :gen_tcp.send(replica_socket, Server.Protocol.pack(["REPLCONF", "GETACK", "*"]))
+      end)
+
+
+      :ok = wait_and_respond(timeout, client)
+      # wait_and_respond(count, timeout, start_time, client)
+    else
+      replica_count = Server.Clientbuffer.get_client_count();
+      write_line(":#{replica_count}\r\n", client)
+    end
+
   end
 
-  # defp execute_command("REPLCONF", args, _client) do
-  #   Logger.info("Received REPLCONF with args: #{inspect(args)}")
-  #   case args do
-  #     ["ACK", offset] ->
-  #       # Handle ACK from replica
-  #       Logger.info("Received ACK from replica with offset: #{offset}")
-  #       :ok
-  #     _ ->
-  #       # Handle other REPLCONF subcommands if needed
-  #       :ok
-  #   end
-  # end
+  defp wait_and_respond(timeout, client) do
+    # Spawn a new process to handle the waiting and responding
+    spawn(fn ->
+      # Wait for the specified timeout
+      Process.sleep(timeout)
+
+      # After waiting, get the acknowledgment count and respond
+      ack_count = Server.Acknowledge.get_ack_count()
+      Logger.info("Acknowledge count: #{ack_count}")
+      write_line(":#{ack_count}\r\n", client)
+    end)
+
+    # The main process continues immediately
+    :ok
+  end
+
 
   defp execute_command("PING", [], client) do
     write_line("+PONG\r\n", client)
