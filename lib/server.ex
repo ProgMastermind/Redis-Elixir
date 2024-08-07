@@ -17,27 +17,41 @@ require Logger
       Server.Bytes,
       Server.Acknowledge,
       Server.Pendingwrites,
+      Server.Config,
       {Task, fn -> Server.listen(config) end}
     ]
 
     opts = [strategy: :one_for_one, name: :sup]
-    Supervisor.start_link(children, opts)
+    {:ok, pid} = Supervisor.start_link(children, opts)
+
+    set_initial_config(config)
+
+    {:ok, pid}
   end
 
   defp parse_args do
     {opts, _, _} = OptionParser.parse(System.argv(),
-      switches: [port: :integer, replicaof: :string])
+      switches: [port: :integer, replicaof: :string, dir: :string, dbfilename: :string])
 
     port = opts[:port] || 6379
     replica_of = parse_replicaof(opts[:replicaof])
+    dir = opts[:dir]
+    dbfilename = opts[:dbfilename]
 
-    %{port: port, replica_of: replica_of}
+    %{port: port, replica_of: replica_of, dir: dir, dbfilename: dbfilename}
   end
 
   defp parse_replicaof(nil), do: nil
   defp parse_replicaof(replicaof) do
     [host, port] = String.split(replicaof, " ")
     {host, String.to_integer(port)}
+  end
+
+  defp set_initial_config(config) do
+    Logger.info("Configuring dir: #{config.dir}")
+    Logger.info("Configuring dbname: #{config.dbfilename}")
+    if config.dir, do: Server.Config.set_config("dir", config.dir)
+    if config.dbfilename, do: Server.Config.set_config("dbfilename", config.dbfilename)
   end
 
   @doc """
@@ -542,7 +556,7 @@ require Logger
   #   write_line(":#{replica_count}\r\n", client)
   # end
 
-  defp execute_command("WAIT", [count, timeout], client) do
+  defp execute_command("WAIT", [_count, timeout], client) do
     Logger.info("Wait command is triggering")
     timeout = String.to_integer(timeout)
 
@@ -580,6 +594,16 @@ require Logger
     :ok
   end
 
+  defp execute_command("CONFIG", ["GET", param], client) do
+    value = Server.Config.get_config(param)
+    Logger.info("Value for a dir: #{value}")
+    response = if value do
+      Server.Protocol.pack([param, value]) |> IO.iodata_to_binary()
+    else
+      "$-1\r\n"
+    end
+    write_line(response, client)
+  end
 
   defp execute_command("PING", [], client) do
     write_line("+PONG\r\n", client)
