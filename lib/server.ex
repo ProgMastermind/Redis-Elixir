@@ -604,11 +604,9 @@ require Logger
     end
   end
 
-  # defp execute_command("WAIT", _args, client) do
-  #   Logger.info("sending reply to the client")
-  #   replica_count = Server.Clientbuffer.get_client_count();
-  #   write_line(":#{replica_count}\r\n", client)
-  # end
+  defp execute_command("MULTI", _args, client) do
+    write_line("+OK\r\n", client)
+  end
 
   defp execute_command("WAIT", [_count, timeout], client) do
     Logger.info("Wait command is triggering")
