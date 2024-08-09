@@ -520,8 +520,9 @@ require Logger
     write_line(response, client)
   end
 
-  defp execute_command("SET", [key, value | rest], client) do
+  defp execute_command("SET", [key, value | rest] = args, client) do
     if Server.Transactionstate.get() do
+      Server.Transactionstate.enqueue("SET", args)
       write_line("+QUEUED\r\n", client)
     else
       try do
@@ -559,42 +560,48 @@ require Logger
   end
 
 
-  defp execute_command("GET", [key], client) do
+  defp execute_command("GET", [key] = args, client) do
     IO.puts("Executing GET command for key: #{key}")
-
-    rdb_state = Server.RdbStore.get_state()
-    case Map.fetch(rdb_state, key) do
-      {:ok, value} ->
-        # Logger.info("Value found in RDB store: #{inspect(value)}")
-        case value do
-          {value, expires_at} ->
-            if DateTime.compare(expires_at, DateTime.utc_now()) == :gt do
+    if Server.Transactionstate.get() do
+      Server.Transactionstate.enqueue("GET", args)
+      write_line("+QUEUED\r\n", client)
+    else
+      rdb_state = Server.RdbStore.get_state()
+      case Map.fetch(rdb_state, key) do
+        {:ok, value} ->
+          # Logger.info("Value found in RDB store: #{inspect(value)}")
+          case value do
+            {value, expires_at} ->
+              if DateTime.compare(expires_at, DateTime.utc_now()) == :gt do
+                response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+                write_line(response, client)
+              else
+                write_line("$-1\r\n", client)
+              end
+            _ ->
               response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
               write_line(response, client)
-            else
+          end
+
+        :error ->
+          # If not found in RDB store, check the regular store
+          case Server.Store.get_value_or_false(key) do
+            {:ok, value} ->
+              Logger.info("Value found in regular store: #{inspect(value)}")
+              response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+              write_line(response, client)
+
+            {:error, _reason} ->
               write_line("$-1\r\n", client)
-            end
-          _ ->
-            response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
-            write_line(response, client)
-        end
-
-      :error ->
-        # If not found in RDB store, check the regular store
-        case Server.Store.get_value_or_false(key) do
-          {:ok, value} ->
-            Logger.info("Value found in regular store: #{inspect(value)}")
-            response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
-            write_line(response, client)
-
-          {:error, _reason} ->
-            write_line("$-1\r\n", client)
-        end
+          end
+      end
     end
+
   end
 
-  defp execute_command("INCR", [key], client) do
+  defp execute_command("INCR", [key] = args, client) do
     if Server.Transactionstate.get() do
+      Server.Transactionstate.enqueue("INCR", args)
       write_line("+QUEUED\r\n", client)
     else
       case Server.Store.get_value_or_false(key) do
@@ -612,7 +619,6 @@ require Logger
           write_line(":1\r\n", client)
       end
     end
-
   end
 
   defp execute_command("MULTI", _args, client) do
@@ -624,14 +630,70 @@ require Logger
     end
   end
 
-  defp execute_command("EXEC", _args , client) do
+  defp execute_command("EXEC", _args, client) do
     if Server.Transactionstate.get() do
+      queued_commands = Server.Transactionstate.get_and_clear_queue()
+      Logger.info("Queued commands: #{queued_commands}")
       Server.Transactionstate.set(false)
-      write_line("*0\r\n", client)
+
+      results = Enum.map(queued_commands, fn {cmd, args} ->
+        case cmd do
+          "SET" -> execute_set_command(args, client)
+          "GET" -> execute_get_command(args, client)
+          "INCR" -> execute_incr_command(args, client)
+          # Add other commands as needed
+        end
+      end)
+
+      response = "*#{length(results)}\r\n" <> Enum.join(results)
+      write_line(response, client)
     else
       write_line("-ERR EXEC without MULTI\r\n", client)
     end
   end
+
+
+  #---------------------------------------------------------------
+
+  defp execute_set_command(["SET", key, value | rest], client) do
+    Logger.info("Key: #{key}, Value: #{value}")
+    case rest do
+      ["PX", time] ->
+        time_ms = String.to_integer(time)
+        Server.Store.update(key, value, time_ms)
+      [] ->
+        Server.Store.update(key, value)
+    end
+    "+OK\r\n"
+  end
+
+  defp execute_get_command([key], _client) do
+    case Server.Store.get_value_or_false(key) do
+      {:ok, value} -> "$#{byte_size(value)}\r\n#{value}\r\n"
+      {:error, _} -> "$-1\r\n"
+    end
+  end
+
+  defp execute_incr_command([key], _client) do
+    case Server.Store.get_value_or_false(key) do
+      {:ok, value} ->
+        case Integer.parse(value) do
+          {int_value, _} ->
+            increased_value = int_value + 1
+            Server.Store.update(key, Integer.to_string(increased_value))
+            ":#{increased_value}\r\n"
+          :error ->
+            "-ERR value is not an integer or out of range\r\n"
+        end
+      {:error, _} ->
+        Server.Store.update(key, "1")
+        ":1\r\n"
+    end
+  end
+
+
+
+  #--------------------------------------------------------------------
 
   defp execute_command("WAIT", [_count, timeout], client) do
     Logger.info("Wait command is triggering")
