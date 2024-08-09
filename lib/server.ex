@@ -559,9 +559,19 @@ require Logger
     rdb_state = Server.RdbStore.get_state()
     case Map.fetch(rdb_state, key) do
       {:ok, value} ->
-        Logger.info("Value found in RDB store: #{inspect(value)}")
-        response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
-        write_line(response, client)
+        # Logger.info("Value found in RDB store: #{inspect(value)}")
+        case value do
+          {value, expires_at} ->
+            if DateTime.compare(expires_at, DateTime.utc_now()) == :gt do
+              response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+              write_line(response, client)
+            else
+              write_line("$-1\r\n", client)
+            end
+          _ ->
+            response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+            write_line(response, client)
+        end
 
       :error ->
         # If not found in RDB store, check the regular store
