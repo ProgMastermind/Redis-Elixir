@@ -19,7 +19,7 @@ require Logger
       Server.Pendingwrites,
       Server.Config,
       Server.RdbStore,
-      Server.Transactionstate,
+      Server.ClientState,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -520,9 +520,10 @@ require Logger
     write_line(response, client)
   end
 
-  defp execute_command("SET", [key, value | rest] = args, client) do
-    if Server.Transactionstate.get() do
-      # Server.Transactionstate.enqueue("SET", args)
+  #------------------------------------------------------------------
+  defp execute_command("SET", [key, value | rest], client) do
+    if Server.ClientState.in_transaction?(client) do
+      Server.Commandbuffer.add_command(["SET", key, value | rest])
       write_line("+QUEUED\r\n", client)
     else
       try do
@@ -560,10 +561,10 @@ require Logger
   end
 
 
-  defp execute_command("GET", [key] = args, client) do
+  defp execute_command("GET", [key] , client) do
     IO.puts("Executing GET command for key: #{key}")
-    if Server.Transactionstate.get() do
-      # Server.Transactionstate.enqueue("GET", args)
+    if Server.ClientState.in_transaction?(client) do
+      Server.Commandbuffer.add_command(["GET", key])
       write_line("+QUEUED\r\n", client)
     else
       rdb_state = Server.RdbStore.get_state()
@@ -599,9 +600,9 @@ require Logger
 
   end
 
-  defp execute_command("INCR", [key] = args, client) do
-    if Server.Transactionstate.get() do
-      # Server.Transactionstate.enqueue("INCR", args)
+  defp execute_command("INCR", [key], client) do
+    if Server.ClientState.in_transaction?(client) do
+      Server.Commandbuffer.add_command(["INCR", key])
       write_line("+QUEUED\r\n", client)
     else
       case Server.Store.get_value_or_false(key) do
@@ -622,28 +623,24 @@ require Logger
   end
 
   defp execute_command("MULTI", _args, client) do
-    if Server.Transactionstate.get() do
+    if Server.ClientState.in_transaction?(client) do
       write_line("-ERR MULTI calls can not be nested\r\n", client)
     else
-      Server.Transactionstate.set(true)
+      Server.ClientState.start_transaction(client)
       write_line("+OK\r\n", client)
     end
   end
 
   defp execute_command("EXEC", _args, client) do
-    if Server.Transactionstate.get() do
-      Logger.info("EXEC is executing")
-      queued_commands = Server.Transactionstate.get_and_clear_queue()
+    Logger.info("EXEC is executing")
+    if Server.ClientState.in_transaction?(client) do
+      queued_commands = Server.Commandbuffer.get_and_clear_commands()
       Logger.info("Queued commands: #{queued_commands}")
-      Server.Transactionstate.set(false)
+      Server.ClientState.end_transaction(client)
 
-      results = Enum.map(queued_commands, fn {cmd, args} ->
-        case cmd do
-          "SET" -> execute_set_command(args, client)
-          "GET" -> execute_get_command(args, client)
-          "INCR" -> execute_incr_command(args, client)
-          # Add other commands as needed
-        end
+      results = Enum.map(queued_commands, fn command->
+        Logger.info("Executing command: #{inspect(command)}")
+        execute_queued_command(command, client)
       end)
 
       response = "*#{length(results)}\r\n" <> Enum.join(results)
@@ -653,10 +650,21 @@ require Logger
     end
   end
 
+  #--------------------------------------------------------------------
+
 
   #---------------------------------------------------------------
 
-  defp execute_set_command(["SET", key, value | rest], client) do
+  defp execute_queued_command(command, client) do
+    case command do
+      ["SET" | args] -> execute_set_command(args, client)
+      ["GET" | args] -> execute_get_command(args, client)
+      ["INCR" | args] -> execute_incr_command(args, client)
+      _ -> "-ERR Unknown command '#{Enum.at(command, 0)}'\r\n"
+    end
+  end
+
+  defp execute_set_command([key, value | rest], _client) do
     Logger.info("Key: #{key}, Value: #{value}")
     case rest do
       ["PX", time] ->
