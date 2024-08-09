@@ -18,6 +18,7 @@ require Logger
       Server.Acknowledge,
       Server.Pendingwrites,
       Server.Config,
+      Server.RdbStore,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -25,6 +26,7 @@ require Logger
     {:ok, pid} = Supervisor.start_link(children, opts)
 
     set_initial_config(config)
+    load_rdb()
 
     {:ok, pid}
   end
@@ -52,6 +54,12 @@ require Logger
     Logger.info("Configuring dbname: #{config.dbfilename}")
     if config.dir, do: Server.Config.set_config("dir", config.dir)
     if config.dbfilename, do: Server.Config.set_config("dbfilename", config.dbfilename)
+  end
+
+  defp load_rdb do
+    rdb_path = Server.Config.get_rdb_path()
+    Logger.info("RDB file path is: #{rdb_path}")
+    Server.RdbStore.load_rdb(rdb_path)
   end
 
   @doc """
@@ -536,6 +544,14 @@ require Logger
         write_line("-ERR Internal server error\r\n", client)
     end
   end
+
+  defp execute_command("KEYS", ["*"], client) do
+    Logger.info("Executing keys")
+    keys = Server.RdbStore.get_keys()
+    response = Server.Protocol.pack(keys) |> IO.iodata_to_binary()
+    write_line(response, client)
+  end
+
 
   defp execute_command("GET", [key], client) do
     IO.puts("Executing GET command for key: #{key}")

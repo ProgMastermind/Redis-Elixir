@@ -24,4 +24,10 @@ defmodule Server.Config do
   def handle_call({:get_config, key}, _from, state) do
     {:reply, Map.get(state, key), state}
   end
+
+  def get_rdb_path do
+    dir = get_config("dir") || "."
+    filename = get_config("dbfilename") || "dump.rdb"
+    Path.join(dir, filename)
+  end
 end
