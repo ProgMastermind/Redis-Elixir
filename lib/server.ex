@@ -555,14 +555,25 @@ require Logger
 
   defp execute_command("GET", [key], client) do
     IO.puts("Executing GET command for key: #{key}")
-    case Server.Store.get_value_or_false(key) do
+
+    rdb_state = Server.RdbStore.get_state()
+    case Map.fetch(rdb_state, key) do
       {:ok, value} ->
-        IO.puts("Value found: #{value}")
+        Logger.info("Value found in RDB store: #{inspect(value)}")
         response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
         write_line(response, client)
 
-      {:error, _reason} ->
-        write_line("$-1\r\n", client)
+      :error ->
+        # If not found in RDB store, check the regular store
+        case Server.Store.get_value_or_false(key) do
+          {:ok, value} ->
+            Logger.info("Value found in regular store: #{inspect(value)}")
+            response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+            write_line(response, client)
+
+          {:error, _reason} ->
+            write_line("$-1\r\n", client)
+        end
     end
   end
 

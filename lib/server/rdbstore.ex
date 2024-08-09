@@ -18,6 +18,10 @@ defmodule Server.RdbStore do
     GenServer.call(__MODULE__, :get_keys)
   end
 
+  def get_state do
+    GenServer.call(__MODULE__, :get_state)
+  end
+
   def handle_call({:load_rdb, file_path}, _from, _state) do
     new_state = case File.read(file_path) do
       {:ok, content} ->
@@ -32,5 +36,9 @@ defmodule Server.RdbStore do
   def handle_call(:get_keys, _from, state) do
     keys = Map.keys(state)
     {:reply, keys, state}
+  end
+
+  def handle_call(:get_state, _from, state) do
+    {:reply, state, state}
   end
 end
