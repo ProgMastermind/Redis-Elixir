@@ -608,6 +608,10 @@ require Logger
     write_line("+OK\r\n", client)
   end
 
+  defp execute_command("EXEC", _args, client) do
+    write_line("-ERR EXEC without MULTI\r\n", client)
+  end
+
   defp execute_command("WAIT", [_count, timeout], client) do
     Logger.info("Wait command is triggering")
     timeout = String.to_integer(timeout)
