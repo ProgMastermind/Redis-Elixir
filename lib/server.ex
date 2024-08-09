@@ -522,7 +522,7 @@ require Logger
 
   defp execute_command("SET", [key, value | rest] = args, client) do
     if Server.Transactionstate.get() do
-      Server.Transactionstate.enqueue("SET", args)
+      # Server.Transactionstate.enqueue("SET", args)
       write_line("+QUEUED\r\n", client)
     else
       try do
@@ -563,7 +563,7 @@ require Logger
   defp execute_command("GET", [key] = args, client) do
     IO.puts("Executing GET command for key: #{key}")
     if Server.Transactionstate.get() do
-      Server.Transactionstate.enqueue("GET", args)
+      # Server.Transactionstate.enqueue("GET", args)
       write_line("+QUEUED\r\n", client)
     else
       rdb_state = Server.RdbStore.get_state()
@@ -601,7 +601,7 @@ require Logger
 
   defp execute_command("INCR", [key] = args, client) do
     if Server.Transactionstate.get() do
-      Server.Transactionstate.enqueue("INCR", args)
+      # Server.Transactionstate.enqueue("INCR", args)
       write_line("+QUEUED\r\n", client)
     else
       case Server.Store.get_value_or_false(key) do
