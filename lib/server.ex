@@ -19,6 +19,7 @@ require Logger
       Server.Pendingwrites,
       Server.Config,
       Server.RdbStore,
+      Server.Transactionstate,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -605,11 +606,21 @@ require Logger
   end
 
   defp execute_command("MULTI", _args, client) do
-    write_line("+OK\r\n", client)
+    if Server.Transactionstate.get() do
+      write_line("-ERR MULTI calls can not be nested\r\n", client)
+    else
+      Server.Transactionstate.set(true)
+      write_line("+OK\r\n", client)
+    end
   end
 
-  defp execute_command("EXEC", _args, client) do
-    write_line("-ERR EXEC without MULTI\r\n", client)
+  defp execute_command("EXEC", _args , client) do
+    if Server.Transactionstate.get() do
+      Server.Transactionstate.set(false)
+      write_line("*0\r\n", client)
+    else
+      write_line("-ERR EXEC without MULTI\r\n", client)
+    end
   end
 
   defp execute_command("WAIT", [_count, timeout], client) do
