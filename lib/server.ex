@@ -632,6 +632,7 @@ require Logger
 
   defp execute_command("EXEC", _args, client) do
     if Server.Transactionstate.get() do
+      Logger.info("EXEC is executing")
       queued_commands = Server.Transactionstate.get_and_clear_queue()
       Logger.info("Queued commands: #{queued_commands}")
       Server.Transactionstate.set(false)
