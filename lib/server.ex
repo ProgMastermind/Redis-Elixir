@@ -587,6 +587,19 @@ require Logger
     end
   end
 
+  defp execute_command("INCR", [key], client) do
+    case Server.Store.get_value_or_false(key) do
+      {:ok, value} ->
+        Logger.info("Value found in regular store: #{inspect(value)}")
+        increased_value = String.to_integer(value) + 1;
+        # response = Server.Protocol.pack(increased_value)|> IO.iodata_to_binary()
+        write_line(":#{increased_value}\r\n", client)
+
+      {:error, _reason} ->
+        write_line("$-1\r\n", client)
+    end
+  end
+
   # defp execute_command("WAIT", _args, client) do
   #   Logger.info("sending reply to the client")
   #   replica_count = Server.Clientbuffer.get_client_count();
