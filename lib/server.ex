@@ -590,13 +590,17 @@ require Logger
   defp execute_command("INCR", [key], client) do
     case Server.Store.get_value_or_false(key) do
       {:ok, value} ->
-        Logger.info("Value found in regular store: #{inspect(value)}")
-        increased_value = String.to_integer(value) + 1;
-        # response = Server.Protocol.pack(increased_value)|> IO.iodata_to_binary()
-        write_line(":#{increased_value}\r\n", client)
-
+        case Integer.parse(value) do
+          {int_value, _} ->
+            increased_value = int_value + 1
+            Server.Store.update(key, Integer.to_string(increased_value))
+            write_line(":#{increased_value}\r\n", client)
+          :error ->
+            write_line("-ERR value is not an integer or out of range\r\n", client)
+        end
       {:error, _reason} ->
-        write_line("$-1\r\n", client)
+        Server.Store.update(key, "1")
+        write_line(":1\r\n", client)
     end
   end
 
