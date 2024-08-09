@@ -650,6 +650,15 @@ require Logger
     end
   end
 
+  defp execute_command("DISCARD", _args, client) do
+    if Server.ClientState.in_transaction?(client) do
+      Server.ClientState.end_transaction(client)
+      write_line("+OK\r\n", client)
+    else
+      write_line("-ERR DISCARD without MULTI\r\n", client)
+    end
+  end
+
   #--------------------------------------------------------------------
 
 
