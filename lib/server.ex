@@ -521,29 +521,34 @@ require Logger
   end
 
   defp execute_command("SET", [key, value | rest], client) do
-    try do
-      case rest do
-        [command, time] ->
-          command = String.upcase(to_string(command))
-          if command == "PX" do
-            time_ms = String.to_integer(time)
-            Server.Store.update(key, value, time_ms)
-          end
-        [] ->
-          Server.Store.update(key, value)
+    if Server.Transactionstate.get() do
+      write_line("+QUEUED\r\n", client)
+    else
+      try do
+        case rest do
+          [command, time] ->
+            command = String.upcase(to_string(command))
+            if command == "PX" do
+              time_ms = String.to_integer(time)
+              Server.Store.update(key, value, time_ms)
+            end
+          [] ->
+            Server.Store.update(key, value)
+        end
+
+        Server.Pendingwrites.set_pending_writes()
+        write_line("+OK\r\n", client)
+
+        Server.Commandbuffer.add_command(["SET", key, value | rest])
+        send_buffered_commands_to_replica()
+
+        :ok
+      catch
+        _ ->
+          write_line("-ERR Internal server error\r\n", client)
       end
-
-      Server.Pendingwrites.set_pending_writes()
-      write_line("+OK\r\n", client)
-
-      Server.Commandbuffer.add_command(["SET", key, value | rest])
-      send_buffered_commands_to_replica()
-
-      :ok
-    catch
-      _ ->
-        write_line("-ERR Internal server error\r\n", client)
     end
+
   end
 
   defp execute_command("KEYS", ["*"], client) do
@@ -589,20 +594,25 @@ require Logger
   end
 
   defp execute_command("INCR", [key], client) do
-    case Server.Store.get_value_or_false(key) do
-      {:ok, value} ->
-        case Integer.parse(value) do
-          {int_value, _} ->
-            increased_value = int_value + 1
-            Server.Store.update(key, Integer.to_string(increased_value))
-            write_line(":#{increased_value}\r\n", client)
-          :error ->
-            write_line("-ERR value is not an integer or out of range\r\n", client)
-        end
-      {:error, _reason} ->
-        Server.Store.update(key, "1")
-        write_line(":1\r\n", client)
+    if Server.Transactionstate.get() do
+      write_line("+QUEUED\r\n", client)
+    else
+      case Server.Store.get_value_or_false(key) do
+        {:ok, value} ->
+          case Integer.parse(value) do
+            {int_value, _} ->
+              increased_value = int_value + 1
+              Server.Store.update(key, Integer.to_string(increased_value))
+              write_line(":#{increased_value}\r\n", client)
+            :error ->
+              write_line("-ERR value is not an integer or out of range\r\n", client)
+          end
+        {:error, _reason} ->
+          Server.Store.update(key, "1")
+          write_line(":1\r\n", client)
+      end
     end
+
   end
 
   defp execute_command("MULTI", _args, client) do
