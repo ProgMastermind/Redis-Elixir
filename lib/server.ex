@@ -669,7 +669,7 @@ require Logger
         # For now, all values are treated as strings
         write_line("+string\r\n", client)
       {:error, _reason} ->
-        write_line("+none\r\n", client)codecf
+        write_line("+none\r\n", client)
     end
   end
 
