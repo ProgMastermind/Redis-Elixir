@@ -20,6 +20,7 @@ require Logger
       Server.Config,
       Server.RdbStore,
       Server.ClientState,
+      Server.Streamstore,
       {Task, fn -> Server.listen(config) end}
     ]
 
@@ -663,12 +664,22 @@ require Logger
     end
   end
 
+  defp execute_command("XADD", [stream_key, id | entry], client) do
+    entry_map = Enum.chunk_every(entry, 2) |> Enum.into(%{}, fn [k, v] -> {k, v} end)
+    Logger.info("#{stream_key}, #{id}, #{entry}")
+    result = Server.Streamstore.add_entry(stream_key, id, entry_map)
+    Logger.info("result is #{result}")
+    response = Server.Protocol.pack(result) |> IO.iodata_to_binary()
+    write_line(response, client)
+  end
+
   defp execute_command("TYPE", [key], client) do
-    case Server.Store.get_value_or_false(key) do
-      {:ok, _value} ->
-        # For now, all values are treated as strings
+    cond do
+      Server.Streamstore.get_stream(key) != nil ->
+        write_line("+stream\r\n", client)
+      Server.Store.get_value_or_false(key) != {:error, :not_found} ->
         write_line("+string\r\n", client)
-      {:error, _reason} ->
+      true ->
         write_line("+none\r\n", client)
     end
   end
