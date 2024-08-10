@@ -681,25 +681,27 @@ require Logger
   defp validate_id(stream_key, id) do
     case parse_id(id) do
       {:ok, {new_time, new_seq}} ->
-        Logger.info("#{new_time}: #{new_seq}")
         if new_time == 0 and new_seq == 0 do
           {:error, "The ID specified in XADD must be greater than 0-0"}
         else
-          case Server.Streamstore.get_stream(stream_key) do
+          entries = Server.Streamstore.get_stream(stream_key)
+          Logger.info("entries: #{inspect(entries)}")
+          case entries do
             nil ->
               :ok
-            entries ->
-              case List.first(entries) do
-                nil ->
-                  :ok
-                {last_id, _} ->
-                  {last_time, last_seq} = parse_id(last_id)
-                  Logger.info("#{last_time}: #{last_seq}")
+            [] ->
+              :ok
+            [{last_id, _} | _] ->
+              case parse_id(last_id) do
+                {:ok, {last_time, last_seq}} ->
+                  Logger.info("#{last_time}:#{last_seq}")
                   if new_time > last_time or (new_time == last_time and new_seq > last_seq) do
                     :ok
                   else
                     {:error, "The ID specified in XADD is equal or smaller than the target stream top item"}
                   end
+                :error ->
+                  {:error, "Invalid last ID format"}
               end
           end
         end
