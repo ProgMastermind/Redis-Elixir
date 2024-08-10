@@ -667,7 +667,11 @@ require Logger
   defp execute_command("XADD", [stream_key, id | entry], client) do
     entry_map = Enum.chunk_every(entry, 2) |> Enum.into(%{}, fn [k, v] -> {k, v} end)
 
-    case validate_id(stream_key, id) do
+    case process_id(stream_key, id) do
+      {:ok, final_id} ->
+        result = Server.Streamstore.add_entry(stream_key, final_id, entry_map)
+        response = Server.Protocol.pack(result) |> IO.iodata_to_binary()
+        write_line(response, client)
       :ok ->
         result = Server.Streamstore.add_entry(stream_key, id, entry_map)
         response = Server.Protocol.pack(result) |> IO.iodata_to_binary()
@@ -678,7 +682,42 @@ require Logger
     end
   end
 
-  defp validate_id(stream_key, id) do
+  defp process_id(stream_key, id) do
+    case String.split(id, "-") do
+      [time_str, "*"] ->
+        case Integer.parse(time_str) do
+          {time, ""} ->
+            generate_id(stream_key, time)
+          _ ->
+            {:error, "Invalid time format"}
+        end
+      [time_str, seq_str] ->
+        Logger.info("#{time_str}-#{seq_str}")
+        validate_explicit_id(stream_key, "#{time_str}-#{seq_str}")
+      _ ->
+        {:error, "Invalid ID format"}
+    end
+  end
+
+  defp generate_id(stream_key, time) do
+    entries = Server.Streamstore.get_stream(stream_key)
+    case entries do
+      nil ->
+        if time == 0, do: {:ok, "0-1"}, else: {:ok, "#{time}-0"}
+      [] ->
+        if time == 0, do: {:ok, "0-1"}, else: {:ok, "#{time}-0"}
+      [{last_id, _} | _] ->
+        {:ok, {last_time, last_seq}} = parse_id(last_id)
+        Logger.info("#{last_time}:#{last_seq}")
+        cond do
+          time > last_time -> {:ok, "#{time}-0"}
+          time == last_time -> {:ok, "#{time}-#{last_seq + 1}"}
+          true -> {:error, "The ID specified in XADD is equal or smaller than the target stream top item"}
+        end
+    end
+  end
+
+  defp validate_explicit_id(stream_key, id) do
     case parse_id(id) do
       {:ok, {new_time, new_seq}} ->
         if new_time == 0 and new_seq == 0 do
