@@ -715,7 +715,7 @@ require Logger
             {:error, "Invalid time format"}
         end
       [time_str, seq_str] ->
-        Logger.info("#{time_str}-#{seq_str}")
+        # Logger.info("#{time_str}-#{seq_str}")
         validate_explicit_id(stream_key, "#{time_str}-#{seq_str}")
       _ ->
         {:error, "Invalid ID format"}
@@ -731,7 +731,7 @@ require Logger
         if time == 0, do: {:ok, "0-1"}, else: {:ok, "#{time}-0"}
       [{last_id, _} | _] ->
         {:ok, {last_time, last_seq}} = parse_id(last_id)
-        Logger.info("#{last_time}:#{last_seq}")
+        # Logger.info("#{last_time}:#{last_seq}")
         cond do
           time > last_time -> {:ok, "#{time}-0"}
           time == last_time -> {:ok, "#{time}-#{last_seq + 1}"}
@@ -747,7 +747,7 @@ require Logger
           {:error, "The ID specified in XADD must be greater than 0-0"}
         else
           entries = Server.Streamstore.get_stream(stream_key)
-          Logger.info("entries: #{inspect(entries)}")
+          # Logger.info("entries: #{inspect(entries)}")
           case entries do
             nil ->
               :ok
@@ -784,7 +784,6 @@ require Logger
   end
 
 
-
   defp execute_command("TYPE", [key], client) do
     cond do
       Server.Streamstore.get_stream(key) != nil ->
@@ -796,6 +795,62 @@ require Logger
     end
   end
 
+  defp execute_command("XRANGE", [stream_key, start, end_id], client) do
+    case Server.Streamstore.get_range(stream_key, start, end_id) do
+      {:ok, entries} ->
+        Logger.info(entries)
+        response = format_xrange_response(entries)
+        Logger.info(response)
+        write_line(response, client)
+      {:error, message} ->
+        error_response = "-ERR #{message}\r\n"
+        write_line(error_response, client)
+    end
+  end
+
+  defp format_xrange_response(entries) do
+    Logger.info("Formatting entries: #{inspect(entries)}")
+
+    formatted_entries = Enum.map(entries, fn {id, entry} ->
+      case entry do
+        %{} ->
+          flattened_entry = Enum.flat_map(entry, fn {k, v} -> [k, v] end)
+          Logger.info("Flattened entry: #{inspect([id, flattened_entry])}")
+          [id, flattened_entry]
+        _ ->
+          Logger.warning("Unexpected entry format: #{inspect(entry)}")
+          [id, []]
+      end
+    end)
+
+    Logger.info("Formatted entries: #{inspect(formatted_entries)}")
+
+    # packed_response = pack_xrange_response(formatted_entries)
+    # Logger.info("Packed response: #{inspect(packed_response, limit: :infinity)}")
+
+    # packed_response
+    packed_response = Server.Protocol.pack(formatted_entries)
+    Logger.info("Packed response: #{inspect(packed_response, limit: :infinity)}")
+
+    IO.iodata_to_binary(packed_response)
+  end
+
+  defp pack_xrange_response(entries) do
+    outer_array = ["*#{length(entries)}\r\n"]
+
+    packed_entries = Enum.map(entries, fn [id, values] ->
+      [
+        "*2\r\n",
+        "$#{byte_size(id)}\r\n#{id}\r\n",
+        "*#{length(values)}\r\n",
+        Enum.map(values, fn value ->
+          "$#{byte_size(value)}\r\n#{value}\r\n"
+        end)
+      ]
+    end)
+
+    IO.iodata_to_binary([outer_array | packed_entries])
+  end
 
   #--------------------------------------------------------------------
 
@@ -846,6 +901,7 @@ require Logger
         ":1\r\n"
     end
   end
+
 
   #--------------------------------------------------------------------
 

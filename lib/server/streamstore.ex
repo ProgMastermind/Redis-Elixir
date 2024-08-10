@@ -17,6 +17,20 @@ defmodule Server.Streamstore do
     GenServer.call(__MODULE__, {:get_stream, stream_key})
   end
 
+  def get_range(stream_key, start, end_id) do
+    GenServer.call(__MODULE__, {:get_range, stream_key, start, end_id})
+  end
+
+  def handle_call({:get_range, stream_key, start, end_id}, _from, state) do
+    case Map.get(state, stream_key) do
+      nil ->
+        {:reply, {:ok, []}, state}
+      entries ->
+        filtered_entries = filter_entries(entries, start, end_id)
+        {:reply, {:ok, filtered_entries}, state}
+    end
+  end
+
   def handle_call({:add_entry, stream_key, id, entry}, _from, state) do
     new_state = Map.update(state, stream_key, [{id, entry}], fn entries ->
       [{id, entry} | entries]
@@ -27,4 +41,30 @@ defmodule Server.Streamstore do
   def handle_call({:get_stream, stream_key}, _from, state) do
     {:reply, Map.get(state, stream_key), state}
   end
+
+  defp filter_entries(entries, start, end_id) do
+    {start_time, start_seq} = parse_id_with_defaults(start)
+    {end_time, end_seq} = parse_id_with_defaults(end_id)
+
+    Enum.filter(entries, fn {id, _} ->
+      {time, seq} = parse_id(id)
+      (time > start_time || (time == start_time && seq >= start_seq)) &&
+      (time < end_time || (time == end_time && seq <= end_seq))
+    end)
+    |> Enum.reverse()  # Reverse to get ascending order
+  end
+
+  defp parse_id_with_defaults(id) do
+    case String.split(id, "-") do
+      [time_str] -> {String.to_integer(time_str), 0}
+      [time_str, seq_str] -> {String.to_integer(time_str), String.to_integer(seq_str)}
+      _ -> {0, 0}  # Default case, should not happen with valid input
+    end
+  end
+
+  defp parse_id(id) do
+    [time_str, seq_str] = String.split(id, "-")
+    {String.to_integer(time_str), String.to_integer(seq_str)}
+  end
+
 end
