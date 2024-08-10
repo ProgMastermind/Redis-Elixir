@@ -663,6 +663,17 @@ require Logger
     end
   end
 
+  defp execute_command("TYPE", [key], client) do
+    case Server.Store.get_value_or_false(key) do
+      {:ok, _value} ->
+        # For now, all values are treated as strings
+        write_line("+string\r\n", client)
+      {:error, _reason} ->
+        write_line("+none\r\n", client)codecf
+    end
+  end
+
+
   #--------------------------------------------------------------------
 
 
@@ -712,8 +723,6 @@ require Logger
         ":1\r\n"
     end
   end
-
-
 
   #--------------------------------------------------------------------
 
