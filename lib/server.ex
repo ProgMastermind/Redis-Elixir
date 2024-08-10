@@ -664,6 +664,7 @@ require Logger
     end
   end
 
+  #----------------------------------------------------------------------------------
   defp execute_command("XADD", [stream_key, id | entry], client) do
     entry_map = Enum.chunk_every(entry, 2) |> Enum.into(%{}, fn [k, v] -> {k, v} end)
 
@@ -679,6 +680,28 @@ require Logger
       {:error, message} ->
         error_response = "-ERR #{message}\r\n"
         write_line(error_response, client)
+    end
+  end
+
+  defp process_id(stream_key, "*") do
+    generate_full_id(stream_key)
+  end
+
+  defp generate_full_id(stream_key) do
+    current_time = System.system_time(:millisecond)
+    entries = Server.Streamstore.get_stream(stream_key)
+    case entries do
+      nil ->
+        {:ok, "#{current_time}-0"}
+      [] ->
+        {:ok, "#{current_time}-0"}
+      [{last_id, _} | _] ->
+        {last_time, last_seq} = parse_id(last_id)
+        if current_time > last_time do
+          {:ok, "#{current_time}-0"}
+        else
+          {:ok, "#{current_time}-#{last_seq + 1}"}
+        end
     end
   end
 
@@ -759,6 +782,8 @@ require Logger
       _ -> :error
     end
   end
+
+
 
   defp execute_command("TYPE", [key], client) do
     cond do
