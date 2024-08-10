@@ -25,4 +25,27 @@ defmodule Server.ClientState do
       end
     end)
   end
+
+  def add_command(client, command) do
+    Agent.update(__MODULE__, fn state ->
+      case Map.get(state, client) do
+        nil -> state
+        client_state ->
+          updated_commands = [command | client_state.queued_commands]
+          Map.put(state, client, %{client_state | queued_commands: updated_commands})
+      end
+    end)
+  end
+
+  def get_and_clear_commands(client) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      case Map.get(state, client) do
+        nil -> {[], state}
+        client_state ->
+          commands = Enum.reverse(client_state.queued_commands)
+          updated_state = Map.put(state, client, %{client_state | queued_commands: []})
+          {commands, updated_state}
+      end
+    end)
+  end
 end

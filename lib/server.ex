@@ -523,7 +523,8 @@ require Logger
   #------------------------------------------------------------------
   defp execute_command("SET", [key, value | rest], client) do
     if Server.ClientState.in_transaction?(client) do
-      Server.Commandbuffer.add_command(["SET", key, value | rest])
+      # Server.Commandbuffer.add_command(["SET", key, value | rest])
+      Server.ClientState.add_command(client, ["SET", key, value | rest])
       write_line("+QUEUED\r\n", client)
     else
       try do
@@ -564,7 +565,8 @@ require Logger
   defp execute_command("GET", [key] , client) do
     IO.puts("Executing GET command for key: #{key}")
     if Server.ClientState.in_transaction?(client) do
-      Server.Commandbuffer.add_command(["GET", key])
+      # Server.Commandbuffer.add_command(["GET", key])
+      Server.ClientState.add_command(client, ["GET", key])
       write_line("+QUEUED\r\n", client)
     else
       rdb_state = Server.RdbStore.get_state()
@@ -602,7 +604,8 @@ require Logger
 
   defp execute_command("INCR", [key], client) do
     if Server.ClientState.in_transaction?(client) do
-      Server.Commandbuffer.add_command(["INCR", key])
+      # Server.Commandbuffer.add_command(["INCR", key])
+      Server.ClientState.add_command(client, ["INCR", key])
       write_line("+QUEUED\r\n", client)
     else
       case Server.Store.get_value_or_false(key) do
@@ -634,7 +637,8 @@ require Logger
   defp execute_command("EXEC", _args, client) do
     Logger.info("EXEC is executing")
     if Server.ClientState.in_transaction?(client) do
-      queued_commands = Server.Commandbuffer.get_and_clear_commands()
+      # queued_commands = Server.Commandbuffer.get_and_clear_commands()
+      queued_commands = Server.ClientState.get_and_clear_commands(client)
       Logger.info("Queued commands: #{queued_commands}")
       Server.ClientState.end_transaction(client)
 
