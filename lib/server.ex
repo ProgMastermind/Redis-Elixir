@@ -666,11 +666,55 @@ require Logger
 
   defp execute_command("XADD", [stream_key, id | entry], client) do
     entry_map = Enum.chunk_every(entry, 2) |> Enum.into(%{}, fn [k, v] -> {k, v} end)
-    Logger.info("#{stream_key}, #{id}, #{entry}")
-    result = Server.Streamstore.add_entry(stream_key, id, entry_map)
-    Logger.info("result is #{result}")
-    response = Server.Protocol.pack(result) |> IO.iodata_to_binary()
-    write_line(response, client)
+
+    case validate_id(stream_key, id) do
+      :ok ->
+        result = Server.Streamstore.add_entry(stream_key, id, entry_map)
+        response = Server.Protocol.pack(result) |> IO.iodata_to_binary()
+        write_line(response, client)
+      {:error, message} ->
+        error_response = "-ERR #{message}\r\n"
+        write_line(error_response, client)
+    end
+  end
+
+  defp validate_id(stream_key, id) do
+    case parse_id(id) do
+      {:ok, {new_time, new_seq}} ->
+        if new_time == 0 and new_seq == 0 do
+          {:error, "The ID specified in XADD must be greater than 0-0"}
+        else
+          case Server.Streamstore.get_stream(stream_key) do
+            nil ->
+              :ok
+            entries ->
+              case List.first(entries) do
+                nil ->
+                  :ok
+                {last_id, _} ->
+                  {last_time, last_seq} = parse_id(last_id)
+                  if new_time > last_time or (new_time == last_time and new_seq > last_seq) do
+                    :ok
+                  else
+                    {:error, "The ID specified in XADD is equal or smaller than the target stream top item"}
+                  end
+              end
+          end
+        end
+      :error ->
+        {:error, "Invalid ID format"}
+    end
+  end
+
+  defp parse_id(id) do
+    case String.split(id, "-") do
+      [time_str, seq_str] ->
+        case {Integer.parse(time_str), Integer.parse(seq_str)} do
+          {{time, ""}, {seq, ""}} -> {:ok, {time, seq}}
+          _ -> :error
+        end
+      _ -> :error
+    end
   end
 
   defp execute_command("TYPE", [key], client) do
