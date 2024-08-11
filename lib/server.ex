@@ -2,7 +2,7 @@ defmodule Server do
   @moduledoc """
   Your implementation of a Redis server
   """
-require Logger
+  require Logger
 
   use Application
 
@@ -110,7 +110,7 @@ require Logger
     else
       {:error, reason} ->
         IO.puts("Handshake failed: #{inspect(reason)}")
-        # :gen_tcp.close(socket)
+        :gen_tcp.close(socket)
         {:error, reason}
     end
   end
