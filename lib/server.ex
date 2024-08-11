@@ -849,7 +849,16 @@ require Logger
     case Enum.split_while(args, fn arg -> arg != "streams" end) do
       {["block", timeout | _], ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
-        execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
+        actual_end = if ids == "$" do
+          case Server.Streamstore.get_last_id(stream_keys) do
+            {:ok, last_id} -> last_id
+            {:error, _} -> "0.0"
+          end
+        else
+          ids
+        end
+        # execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
+        execute_xread_blocking(stream_keys, actual_end, String.to_integer(timeout), client)
 
       {_, ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
