@@ -828,21 +828,34 @@ require Logger
   end
 
 
-  defp execute_command("XREAD", ["streams", stream_key, id], client) do
-    Logger.info("Executing XREAD command: #{stream_key}, #{id}")
+  defp execute_command("XREAD", ["streams" | args], client) do
+    {stream_keys, ids} = Enum.split(args, div(length(args), 2))
+    Logger.info("Executing XREAD command for streams: #{inspect(stream_keys)}")
 
-    case Server.Streamstore.get_entries_after(stream_key, id) do
-      {:ok, entries} ->
-        Logger.info("Got entries from Streamstore: #{inspect(entries)}")
-        response = format_xread_response(stream_key, entries)
-        Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
-        write_line(response, client)
-      {:error, message} ->
-        Logger.error("Error in XREAD: #{message}")
-        error_response = "-ERR #{message}\r\n"
-        write_line(error_response, client)
-    end
+    results = Enum.zip(stream_keys, ids)
+    |> Enum.map(fn {stream_key, id} ->
+      case Server.Streamstore.get_entries_after(stream_key, id) do
+        {:ok, entries} -> {stream_key, entries}
+        {:error, _} -> {stream_key, []}
+      end
+    end)
+
+    response = format_xread_response(results)
+    Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
+    write_line(response, client)
   end
+
+  defp format_xread_response(results) do
+    formatted_results = Enum.map(results, fn {stream_key, entries} ->
+      formatted_entries = Enum.map(entries, fn {id, data} ->
+        [id, Enum.flat_map(data, fn {k, v} -> [k, v] end)]
+      end)
+      [stream_key, formatted_entries]
+    end)
+
+    Server.Protocol.pack(formatted_results)
+  end
+
 
   defp format_xrange_response(entries) do
     Logger.info("Formatting entries: #{inspect(entries)}")
@@ -867,21 +880,6 @@ require Logger
     IO.iodata_to_binary(packed_response)
   end
 
-
-  defp format_xread_response(stream_key, entries) do
-    formatted_entries = Enum.map(entries, fn {id, data} ->
-      [id, Enum.flat_map(data, fn {k, v} -> [k, v] end)]
-    end)
-
-    response = [
-      [
-        stream_key,
-        formatted_entries
-      ]
-    ]
-
-    Server.Protocol.pack(response) |> IO.iodata_to_binary()
-  end
 
   #--------------------------------------------------------------------
 
