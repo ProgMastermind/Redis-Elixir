@@ -95,11 +95,9 @@ defmodule Server.Rdb do
     {timestamp, rest} =
       case unit do
         :second ->
-          # <<timestamp::32, rest::binary>> = data
           <<timestamp::little-integer-size(32), rest::binary>> = data
           {timestamp, rest}
         :millisecond ->
-          # <<timestamp::64, rest::binary>> = data
           <<timestamp::little-integer-size(64), rest::binary>> = data
           {timestamp, rest}
       end

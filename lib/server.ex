@@ -99,7 +99,7 @@ defmodule Server do
   end
 
   # ------------------------------------------------------------------------
-  # Replicas process
+  # Replica handling commands
 
   defp perform_handshake(socket, replica_port) do
     with :ok <- send_ping(socket),
@@ -125,6 +125,34 @@ defmodule Server do
 
   defp send_replconf_capa(socket) do
     send_command(socket, ["REPLCONF", "capa", "psync2"], "+OK\r\n")
+  end
+
+  defp send_command(socket, command, expected_response) do
+    packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+    case :gen_tcp.send(socket, packed_command) do
+      :ok ->
+        receive_response(socket, expected_response)
+      {:error, reason} ->
+        IO.puts("Failed to send command: #{inspect(command)}")
+        {:error, reason}
+    end
+  end
+
+  defp receive_response(socket, expected_response) do
+    case :gen_tcp.recv(socket, 0, 5000) do
+      {:ok, received_data} ->
+        Logger.debug("Received raw bytes: #{inspect(received_data, limit: :infinity, binaries: :as_binaries)}")
+        if received_data == expected_response do
+          Logger.debug("Received expected response")
+          :ok
+        else
+          Logger.warning("Unexpected response. Expected: #{inspect(expected_response)}, Received: #{inspect(received_data)}")
+          {:error, :unexpected_response}
+        end
+      {:error, reason} ->
+        Logger.error("Error receiving response: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   defp send_psync(socket) do
@@ -199,7 +227,6 @@ defmodule Server do
 
   defp parse_multiple_commands(data, acc) do
     Logger.debug("Parsing data: #{inspect(data)}")
-    # Server.Bytes.increment_offset(byte_size(data))
     case Server.Protocol.parse(data) do
       {:ok, parsed_command, rest} ->
         Logger.debug("Parsed command: #{inspect(parsed_command)}, remaining: #{inspect(rest)}")
@@ -228,8 +255,6 @@ defmodule Server do
   end
 
 
-
-  #-------------------------------------------------------------
   defp parse_psync_response(data) do
     parts = String.split(data, "\r\n", parts: 2)
 
@@ -299,40 +324,9 @@ defmodule Server do
         Logger.error("Failed to send REPLCONF ACK: #{inspect(reason)}")
     end
   end
-  #-----------------------------------------------------------------
-
-
-  defp send_command(socket, command, expected_response) do
-    packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
-    case :gen_tcp.send(socket, packed_command) do
-      :ok ->
-        receive_response(socket, expected_response)
-      {:error, reason} ->
-        IO.puts("Failed to send command: #{inspect(command)}")
-        {:error, reason}
-    end
-  end
-
-  defp receive_response(socket, expected_response) do
-    case :gen_tcp.recv(socket, 0, 5000) do
-      {:ok, received_data} ->
-        Logger.debug("Received raw bytes: #{inspect(received_data, limit: :infinity, binaries: :as_binaries)}")
-        if received_data == expected_response do
-          Logger.debug("Received expected response")
-          :ok
-        else
-          Logger.warning("Unexpected response. Expected: #{inspect(expected_response)}, Received: #{inspect(received_data)}")
-          {:error, :unexpected_response}
-        end
-      {:error, reason} ->
-        Logger.error("Error receiving response: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
 
 
   #----------------------------------------------------------------------------------
-
   # Server Code
   defp loop_acceptor(socket, config) do
     case :gen_tcp.accept(socket) do
@@ -343,7 +337,6 @@ defmodule Server do
         {:error, reason}
     end
   end
-
 
   defp serve(client, config) do
     try do
@@ -388,7 +381,6 @@ defmodule Server do
   end
 
 
-
   # ---------------------------------------------------------------
   # Helpers
   defp replication_id do
@@ -426,7 +418,9 @@ defmodule Server do
       end)
     end)
   end
+
   # -------------------------------------------------------------------
+  # handling of commands
 
   defp execute_command_with_config(command, args, client, config) do
     case command do
@@ -476,7 +470,6 @@ defmodule Server do
         Logger.info("Received ACK from replica with offset: #{offset}")
         count = Server.Acknowledge.get_ack_count();
         Logger.info("Received acknowledgement from #{count} replicas")
-        # You might want to update some internal state here
         :ok
 
       _ ->
@@ -501,30 +494,13 @@ defmodule Server do
     end
   end
 
-  defp send_rdb_file(client) do
-    try do
-      rdb_content = empty_rdb_file()
-      length = byte_size(rdb_content)
-      header = "$#{length}\r\n"
-      :ok = :gen_tcp.send(client, [header, rdb_content])
-    catch
-      :error, :closed ->
-        Logger.warning("Connection closed while sending RDB file")
-      error ->
-        Logger.error("Error sending RDB file: #{inspect(error)}")
-    end
-  end
-
-
   defp execute_command("ECHO", [message], client) do
     response = Server.Protocol.pack(message) |> IO.iodata_to_binary()
     write_line(response, client)
   end
 
-  #------------------------------------------------------------------
   defp execute_command("SET", [key, value | rest], client) do
     if Server.ClientState.in_transaction?(client) do
-      # Server.Commandbuffer.add_command(["SET", key, value | rest])
       Server.ClientState.add_command(client, ["SET", key, value | rest])
       write_line("+QUEUED\r\n", client)
     else
@@ -566,7 +542,6 @@ defmodule Server do
   defp execute_command("GET", [key] , client) do
     IO.puts("Executing GET command for key: #{key}")
     if Server.ClientState.in_transaction?(client) do
-      # Server.Commandbuffer.add_command(["GET", key])
       Server.ClientState.add_command(client, ["GET", key])
       write_line("+QUEUED\r\n", client)
     else
@@ -605,7 +580,6 @@ defmodule Server do
 
   defp execute_command("INCR", [key], client) do
     if Server.ClientState.in_transaction?(client) do
-      # Server.Commandbuffer.add_command(["INCR", key])
       Server.ClientState.add_command(client, ["INCR", key])
       write_line("+QUEUED\r\n", client)
     else
@@ -638,7 +612,6 @@ defmodule Server do
   defp execute_command("EXEC", _args, client) do
     Logger.info("EXEC is executing")
     if Server.ClientState.in_transaction?(client) do
-      # queued_commands = Server.Commandbuffer.get_and_clear_commands()
       queued_commands = Server.ClientState.get_and_clear_commands(client)
       Logger.info("Queued commands: #{queued_commands}")
       Server.ClientState.end_transaction(client)
@@ -664,7 +637,6 @@ defmodule Server do
     end
   end
 
-  #----------------------------------------------------------------------------------
   defp execute_command("XADD", [stream_key, id | entry], client) do
     entry_map = Enum.chunk_every(entry, 2) |> Enum.into(%{}, fn [k, v] -> {k, v} end)
 
@@ -682,6 +654,118 @@ defmodule Server do
         write_line(error_response, client)
     end
   end
+
+  defp execute_command("TYPE", [key], client) do
+    cond do
+      Server.Streamstore.get_stream(key) != nil ->
+        write_line("+stream\r\n", client)
+      Server.Store.get_value_or_false(key) != {:error, :not_found} ->
+        write_line("+string\r\n", client)
+      true ->
+        write_line("+none\r\n", client)
+    end
+  end
+
+  defp execute_command("XRANGE", [stream_key, start, end_id], client) do
+    actual_start = if start == "-" do
+      case Server.Streamstore.get_first_id(stream_key) do
+        {:ok, first_id} -> first_id
+        {:error, _} -> "0-0"  # Use a default start if the stream is empty
+      end
+    else
+      start
+    end
+
+    actual_end = if end_id == "+" do
+      case Server.Streamstore.get_last_id(stream_key) do
+        {:ok, last_id} -> last_id
+        {:error, _} -> "0.0"
+      end
+    else
+      end_id
+    end
+
+    case Server.Streamstore.get_range(stream_key, actual_start, actual_end) do
+      {:ok, entries} ->
+        Logger.info("Got entries from Streamstore: #{inspect(entries)}")
+        response = format_xrange_response(entries)
+        Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
+        write_line(response, client)
+      {:error, message} ->
+        Logger.error("Error in XRANGE: #{message}")
+        error_response = "-ERR #{message}\r\n"
+        write_line(error_response, client)
+    end
+  end
+
+
+  defp execute_command("XREAD", args, client) do
+    case Enum.split_while(args, fn arg -> arg != "streams" end) do
+      {["block", timeout | _], ["streams" | rest]} ->
+        {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
+        execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
+      {_, ["streams" | rest]} ->
+        {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
+        response = execute_xread_default(stream_keys, ids)
+        write_line(response, client)
+    end
+  end
+
+  defp execute_command("WAIT", [_count, timeout], client) do
+    Logger.info("Wait command is triggering")
+    timeout = String.to_integer(timeout)
+
+    if Server.Pendingwrites.pending_writes?() do
+      Server.Acknowledge.reset_ack_count()
+
+      Server.Clientbuffer.get_clients()
+      |> Enum.each(fn replica_socket ->
+        :gen_tcp.send(replica_socket, Server.Protocol.pack(["REPLCONF", "GETACK", "*"]))
+      end)
+
+
+      :ok = wait_and_respond(timeout, client)
+    else
+      replica_count = Server.Clientbuffer.get_client_count();
+      write_line(":#{replica_count}\r\n", client)
+    end
+
+  end
+
+  defp execute_command("CONFIG", ["GET", param], client) do
+    value = Server.Config.get_config(param)
+    Logger.info("Value for a dir: #{value}")
+    response = if value do
+      Server.Protocol.pack([param, value]) |> IO.iodata_to_binary()
+    else
+      "$-1\r\n"
+    end
+    write_line(response, client)
+  end
+
+  defp execute_command("PING", [], client) do
+    write_line("+PONG\r\n", client)
+  end
+
+  defp execute_command(command, _args, client) do
+    write_line("-ERR Unknown command '#{command}'\r\n", client)
+  end
+
+  #------------------------------------------------------------------------------
+  defp send_rdb_file(client) do
+    try do
+      rdb_content = empty_rdb_file()
+      length = byte_size(rdb_content)
+      header = "$#{length}\r\n"
+      :ok = :gen_tcp.send(client, [header, rdb_content])
+    catch
+      :error, :closed ->
+        Logger.warning("Connection closed while sending RDB file")
+      error ->
+        Logger.error("Error sending RDB file: #{inspect(error)}")
+    end
+  end
+
 
   defp process_id(stream_key, "*") do
     generate_full_id(stream_key)
@@ -721,6 +805,7 @@ defmodule Server do
         {:error, "Invalid ID format"}
     end
   end
+
 
   defp generate_id(stream_key, time) do
     entries = Server.Streamstore.get_stream(stream_key)
@@ -783,64 +868,6 @@ defmodule Server do
     end
   end
 
-
-  defp execute_command("TYPE", [key], client) do
-    cond do
-      Server.Streamstore.get_stream(key) != nil ->
-        write_line("+stream\r\n", client)
-      Server.Store.get_value_or_false(key) != {:error, :not_found} ->
-        write_line("+string\r\n", client)
-      true ->
-        write_line("+none\r\n", client)
-    end
-  end
-
-  defp execute_command("XRANGE", [stream_key, start, end_id], client) do
-    actual_start = if start == "-" do
-      case Server.Streamstore.get_first_id(stream_key) do
-        {:ok, first_id} -> first_id
-        {:error, _} -> "0-0"  # Use a default start if the stream is empty
-      end
-    else
-      start
-    end
-
-    actual_end = if end_id == "+" do
-      case Server.Streamstore.get_last_id(stream_key) do
-        {:ok, last_id} -> last_id
-        {:error, _} -> "0.0"
-      end
-    else
-      end_id
-    end
-
-    case Server.Streamstore.get_range(stream_key, actual_start, actual_end) do
-      {:ok, entries} ->
-        Logger.info("Got entries from Streamstore: #{inspect(entries)}")
-        response = format_xrange_response(entries)
-        Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
-        write_line(response, client)
-      {:error, message} ->
-        Logger.error("Error in XRANGE: #{message}")
-        error_response = "-ERR #{message}\r\n"
-        write_line(error_response, client)
-    end
-  end
-
-
-  defp execute_command("XREAD", args, client) do
-    case Enum.split_while(args, fn arg -> arg != "streams" end) do
-      {["block", timeout | _], ["streams" | rest]} ->
-        {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
-        execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
-      {_, ["streams" | rest]} ->
-        {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
-        response = execute_xread_default(stream_keys, ids)
-        write_line(response, client)
-    end
-  end
-
-
   defp execute_xread_blocking(stream_keys, ids, timeout, client) do
     Logger.info("Executing blocking XREAD with keys: #{inspect(stream_keys)}, ids: #{inspect(ids)}, timeout: #{timeout}")
 
@@ -895,7 +922,6 @@ defmodule Server do
     write_line(result, client)
   end
 
-
   defp execute_xread_default(stream_keys, ids) do
     results = Enum.zip(stream_keys, ids)
     |> Enum.map(fn {stream_key, id} ->
@@ -920,7 +946,6 @@ defmodule Server do
     Server.Protocol.pack(formatted_results)
   end
 
-
   defp format_xrange_response(entries) do
     Logger.info("Formatting entries: #{inspect(entries)}")
 
@@ -944,11 +969,21 @@ defmodule Server do
     IO.iodata_to_binary(packed_response)
   end
 
+  defp wait_and_respond(timeout, client) do
+    # Spawn a new process to handle the waiting and responding
+    spawn(fn ->
+      # Wait for the specified timeout
+      Process.sleep(timeout)
 
-  #--------------------------------------------------------------------
+      # After waiting, get the acknowledgment count and respond
+      ack_count = Server.Acknowledge.get_ack_count()
+      Logger.info("Acknowledge count: #{ack_count}")
+      write_line(":#{ack_count}\r\n", client)
+    end)
 
-
-  #---------------------------------------------------------------
+    # The main process continues immediately
+    :ok
+  end
 
   defp execute_queued_command(command, client) do
     case command do
@@ -994,67 +1029,6 @@ defmodule Server do
         ":1\r\n"
     end
   end
-
-
-  #--------------------------------------------------------------------
-
-  defp execute_command("WAIT", [_count, timeout], client) do
-    Logger.info("Wait command is triggering")
-    timeout = String.to_integer(timeout)
-
-    if Server.Pendingwrites.pending_writes?() do
-      Server.Acknowledge.reset_ack_count()
-
-      Server.Clientbuffer.get_clients()
-      |> Enum.each(fn replica_socket ->
-        :gen_tcp.send(replica_socket, Server.Protocol.pack(["REPLCONF", "GETACK", "*"]))
-      end)
-
-
-      :ok = wait_and_respond(timeout, client)
-      # wait_and_respond(count, timeout, start_time, client)
-    else
-      replica_count = Server.Clientbuffer.get_client_count();
-      write_line(":#{replica_count}\r\n", client)
-    end
-
-  end
-
-  defp wait_and_respond(timeout, client) do
-    # Spawn a new process to handle the waiting and responding
-    spawn(fn ->
-      # Wait for the specified timeout
-      Process.sleep(timeout)
-
-      # After waiting, get the acknowledgment count and respond
-      ack_count = Server.Acknowledge.get_ack_count()
-      Logger.info("Acknowledge count: #{ack_count}")
-      write_line(":#{ack_count}\r\n", client)
-    end)
-
-    # The main process continues immediately
-    :ok
-  end
-
-  defp execute_command("CONFIG", ["GET", param], client) do
-    value = Server.Config.get_config(param)
-    Logger.info("Value for a dir: #{value}")
-    response = if value do
-      Server.Protocol.pack([param, value]) |> IO.iodata_to_binary()
-    else
-      "$-1\r\n"
-    end
-    write_line(response, client)
-  end
-
-  defp execute_command("PING", [], client) do
-    write_line("+PONG\r\n", client)
-  end
-
-  defp execute_command(command, _args, client) do
-    write_line("-ERR Unknown command '#{command}'\r\n", client)
-  end
-
 
   defp write_line(line, client) do
     :gen_tcp.send(client, line)
