@@ -827,6 +827,23 @@ require Logger
     end
   end
 
+
+  defp execute_command("XREAD", ["streams", stream_key, id], client) do
+    Logger.info("Executing XREAD command: #{stream_key}, #{id}")
+
+    case Server.Streamstore.get_entries_after(stream_key, id) do
+      {:ok, entries} ->
+        Logger.info("Got entries from Streamstore: #{inspect(entries)}")
+        response = format_xread_response(stream_key, entries)
+        Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
+        write_line(response, client)
+      {:error, message} ->
+        Logger.error("Error in XREAD: #{message}")
+        error_response = "-ERR #{message}\r\n"
+        write_line(error_response, client)
+    end
+  end
+
   defp format_xrange_response(entries) do
     Logger.info("Formatting entries: #{inspect(entries)}")
 
@@ -848,6 +865,22 @@ require Logger
     Logger.info("Packed response: #{inspect(packed_response, limit: :infinity)}")
 
     IO.iodata_to_binary(packed_response)
+  end
+
+
+  defp format_xread_response(stream_key, entries) do
+    formatted_entries = Enum.map(entries, fn {id, data} ->
+      [id, Enum.flat_map(data, fn {k, v} -> [k, v] end)]
+    end)
+
+    response = [
+      [
+        stream_key,
+        formatted_entries
+      ]
+    ]
+
+    Server.Protocol.pack(response) |> IO.iodata_to_binary()
   end
 
   #--------------------------------------------------------------------
