@@ -858,32 +858,75 @@ require Logger
     end
   end
 
+  # defp execute_xread_blocking(stream_keys, ids, timeout, client) do
+  #   Logger.info("Executing blocking XREAD with keys: #{inspect(stream_keys)}, ids: #{inspect(ids)}, timeout: #{timeout}")
+
+  #   Server.Streamstore.set_block_read_active(true, self())
+
+  #   ref = make_ref()
+  #   timer_ref = Process.send_after(self(), {:timeout, ref}, timeout)
+
+  #   result = receive do
+  #     {:timeout, ^ref} ->
+  #       Logger.info("XREAD BLOCK timed out")
+  #       "$-1\r\n"
+
+  #     {:stream_update, updated_stream_key, id} ->
+  #       Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
+  #       if updated_stream_key in stream_keys do
+  #         Logger.info("Update matches watched stream, executing default XREAD")
+  #         execute_xread_default(stream_keys, ids)
+  #       else
+  #         Logger.info("Update doesn't match watched stream, continuing to block")
+  #         execute_xread_blocking(stream_keys, ids, timeout, client)
+  #       end
+  #   end
+
+  #   Server.Streamstore.set_block_read_active(false)
+  #   Process.cancel_timer(timer_ref)
+  #   write_line(result, client)
+  # end
+
   defp execute_xread_blocking(stream_keys, ids, timeout, client) do
     Logger.info("Executing blocking XREAD with keys: #{inspect(stream_keys)}, ids: #{inspect(ids)}, timeout: #{timeout}")
 
     Server.Streamstore.set_block_read_active(true, self())
 
-    ref = make_ref()
-    timer_ref = Process.send_after(self(), {:timeout, ref}, timeout)
+    result = if timeout == 0 do
+      receive do
+        {:stream_update, updated_stream_key, id} ->
+          Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
+          if updated_stream_key in stream_keys do
+            Logger.info("Update matches watched stream, executing default XREAD")
+            execute_xread_default(stream_keys, ids)
+          else
+            Logger.info("Update doesn't match watched stream, continuing to block")
+            execute_xread_blocking(stream_keys, ids, timeout, client)
+          end
+      end
+    else
+      ref = make_ref()
+      timer_ref = Process.send_after(self(), {:timeout, ref}, timeout)
 
-    result = receive do
-      {:timeout, ^ref} ->
-        Logger.info("XREAD BLOCK timed out")
-        "$-1\r\n"
+      receive do
+        {:timeout, ^ref} ->
+          Logger.info("XREAD BLOCK timed out")
+          "$-1\r\n"
 
-      {:stream_update, updated_stream_key, id} ->
-        Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
-        if updated_stream_key in stream_keys do
-          Logger.info("Update matches watched stream, executing default XREAD")
-          execute_xread_default(stream_keys, ids)
-        else
-          Logger.info("Update doesn't match watched stream, continuing to block")
-          execute_xread_blocking(stream_keys, ids, timeout, client)
-        end
+        {:stream_update, updated_stream_key, id} ->
+          Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
+          Process.cancel_timer(timer_ref)
+          if updated_stream_key in stream_keys do
+            Logger.info("Update matches watched stream, executing default XREAD")
+            execute_xread_default(stream_keys, ids)
+          else
+            Logger.info("Update doesn't match watched stream, continuing to block")
+            execute_xread_blocking(stream_keys, ids, timeout, client)
+          end
+      end
     end
 
     Server.Streamstore.set_block_read_active(false)
-    Process.cancel_timer(timer_ref)
     write_line(result, client)
   end
 
