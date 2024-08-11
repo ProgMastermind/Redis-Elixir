@@ -756,7 +756,7 @@ require Logger
             [{last_id, _} | _] ->
               case parse_id(last_id) do
                 {:ok, {last_time, last_seq}} ->
-                  Logger.info("#{last_time}:#{last_seq}")
+                  # Logger.info("#{last_time}:#{last_seq}")
                   if new_time > last_time or (new_time == last_time and new_seq > last_seq) do
                     :ok
                   else
@@ -828,37 +828,11 @@ require Logger
   end
 
 
-  # defp execute_command("XREAD", ["streams" | args], client) do
-  #   {stream_keys, ids} = Enum.split(args, div(length(args), 2))
-  #   Logger.info("Executing XREAD command for streams: #{inspect(stream_keys)}")
-
-  #   results = Enum.zip(stream_keys, ids)
-  #   |> Enum.map(fn {stream_key, id} ->
-  #     case Server.Streamstore.get_entries_after(stream_key, id) do
-  #       {:ok, entries} -> {stream_key, entries}
-  #       {:error, _} -> {stream_key, []}
-  #     end
-  #   end)
-
-  #   response = format_xread_response(results)
-  #   Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
-  #   write_line(response, client)
-  # end
-
   defp execute_command("XREAD", args, client) do
     case Enum.split_while(args, fn arg -> arg != "streams" end) do
       {["block", timeout | _], ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
         execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
-      # {["block", timeout | _], ["streams" | [stream_key, id]]} ->
-      #   max_end = if id == "$" do
-      #     case Server.Streamstore.get_last_id(stream_key) do
-      #       {:ok, last_id} -> last_id
-      #       {:error, _} -> "0.0"
-      #     end
-      #   end
-      #   execute_xread_blocking(stream_key, max_end, String.to_integer(timeout), client)
-
       {_, ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
         response = execute_xread_default(stream_keys, ids)
@@ -866,39 +840,22 @@ require Logger
     end
   end
 
-  # defp execute_xread_blocking(stream_keys, ids, timeout, client) do
-  #   Logger.info("Executing blocking XREAD with keys: #{inspect(stream_keys)}, ids: #{inspect(ids)}, timeout: #{timeout}")
-
-  #   Server.Streamstore.set_block_read_active(true, self())
-
-  #   ref = make_ref()
-  #   timer_ref = Process.send_after(self(), {:timeout, ref}, timeout)
-
-  #   result = receive do
-  #     {:timeout, ^ref} ->
-  #       Logger.info("XREAD BLOCK timed out")
-  #       "$-1\r\n"
-
-  #     {:stream_update, updated_stream_key, id} ->
-  #       Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
-  #       if updated_stream_key in stream_keys do
-  #         Logger.info("Update matches watched stream, executing default XREAD")
-  #         execute_xread_default(stream_keys, ids)
-  #       else
-  #         Logger.info("Update doesn't match watched stream, continuing to block")
-  #         execute_xread_blocking(stream_keys, ids, timeout, client)
-  #       end
-  #   end
-
-  #   Server.Streamstore.set_block_read_active(false)
-  #   Process.cancel_timer(timer_ref)
-  #   write_line(result, client)
-  # end
 
   defp execute_xread_blocking(stream_keys, ids, timeout, client) do
     Logger.info("Executing blocking XREAD with keys: #{inspect(stream_keys)}, ids: #{inspect(ids)}, timeout: #{timeout}")
 
     Server.Streamstore.set_block_read_active(true, self())
+
+    actual_ids = Enum.map(Enum.zip(stream_keys, ids), fn {key, id} ->
+      if id == "$" do
+        case Server.Streamstore.get_last_id(key) do
+          {:ok, latest_id} -> latest_id
+          {:error, _} -> "0-0"
+        end
+      else
+        id
+      end
+    end)
 
     result = if timeout == 0 do
       receive do
@@ -906,10 +863,10 @@ require Logger
           Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
           if updated_stream_key in stream_keys do
             Logger.info("Update matches watched stream, executing default XREAD")
-            execute_xread_default(stream_keys, ids)
+            execute_xread_default(stream_keys, actual_ids)
           else
             Logger.info("Update doesn't match watched stream, continuing to block")
-            execute_xread_blocking(stream_keys, ids, timeout, client)
+            execute_xread_blocking(stream_keys, actual_ids, timeout, client)
           end
       end
     else
@@ -926,10 +883,10 @@ require Logger
           Process.cancel_timer(timer_ref)
           if updated_stream_key in stream_keys do
             Logger.info("Update matches watched stream, executing default XREAD")
-            execute_xread_default(stream_keys, ids)
+            execute_xread_default(stream_keys, actual_ids)
           else
             Logger.info("Update doesn't match watched stream, continuing to block")
-            execute_xread_blocking(stream_keys, ids, timeout, client)
+            execute_xread_blocking(stream_keys, actual_ids, timeout, client)
           end
       end
     end
