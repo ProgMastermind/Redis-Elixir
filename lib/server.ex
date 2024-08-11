@@ -850,7 +850,7 @@ require Logger
       {["block", timeout | _], ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
         Logger.info("info :  stream_key:#{inspect(stream_keys)}, ids: #{inspect(ids)}")
-        actual_end = if ids == "$" do
+        actual_end = if ids == ["$"] do
           case Server.Streamstore.get_last_id(stream_keys) do
             {:ok, last_id} -> last_id
             {:error, _} -> "0.0"
