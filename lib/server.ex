@@ -847,17 +847,17 @@ require Logger
 
   defp execute_command("XREAD", args, client) do
     case Enum.split_while(args, fn arg -> arg != "streams" end) do
-      # {["block", timeout | _], ["streams" | rest]} ->
-      #   {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
-      #   execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
-      {["block", timeout | _], ["streams" | [stream_key, id]]} ->
-        max_end = if id == "$" do
-          case Server.Streamstore.get_last_id(stream_key) do
-            {:ok, last_id} -> last_id
-            {:error, _} -> "0.0"
-          end
-        end
-        execute_xread_blocking(stream_key, max_end, String.to_integer(timeout), client)
+      {["block", timeout | _], ["streams" | rest]} ->
+        {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
+        execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
+      # {["block", timeout | _], ["streams" | [stream_key, id]]} ->
+      #   max_end = if id == "$" do
+      #     case Server.Streamstore.get_last_id(stream_key) do
+      #       {:ok, last_id} -> last_id
+      #       {:error, _} -> "0.0"
+      #     end
+      #   end
+      #   execute_xread_blocking(stream_key, max_end, String.to_integer(timeout), client)
 
       {_, ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
