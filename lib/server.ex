@@ -805,7 +805,16 @@ require Logger
       start
     end
 
-    case Server.Streamstore.get_range(stream_key, actual_start, end_id) do
+    actual_end = if end_id == "+" do
+      case Server.Streamstore.get_last_id(stream_key) do
+        {:ok, last_id} -> last_id
+        {:error, _} -> "0.0"
+      end
+    else
+      end_id
+    end
+
+    case Server.Streamstore.get_range(stream_key, actual_start, actual_end) do
       {:ok, entries} ->
         Logger.info("Got entries from Streamstore: #{inspect(entries)}")
         response = format_xrange_response(entries)

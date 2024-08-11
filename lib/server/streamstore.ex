@@ -25,6 +25,10 @@ defmodule Server.Streamstore do
     GenServer.call(__MODULE__, {:get_first_id, stream_key})
   end
 
+  def get_last_id(stream_key) do
+    GenServer.call(__MODULE__, {:get_last_id, stream_key})
+  end
+
   def handle_call({:get_range, stream_key, start, end_id}, _from, state) do
     case Map.get(state, stream_key) do
       nil ->
@@ -52,6 +56,20 @@ defmodule Server.Streamstore do
         {:reply, {:error, :stream_not_found}, state}
       stream when is_list(stream) ->
         case List.last(stream) do
+          {id, _} -> {:reply, {:ok, id}, state}
+          _ -> {:reply, {:error, :invalid_stream_format}, state}
+        end
+      _ ->
+        {:reply, {:error, :invalid_stream_format}, state}
+    end
+  end
+
+  def handle_call({:get_last_id, stream_key}, _from, state) do
+    case Map.get(state, stream_key) do
+      nil ->
+        {:reply, {:error, :stream_not_found}, state}
+      stream when is_list(stream) ->
+        case List.first(stream) do
           {id, _} -> {:reply, {:ok, id}, state}
           _ -> {:reply, {:error, :invalid_stream_format}, state}
         end
