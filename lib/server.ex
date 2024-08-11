@@ -796,13 +796,23 @@ require Logger
   end
 
   defp execute_command("XRANGE", [stream_key, start, end_id], client) do
-    case Server.Streamstore.get_range(stream_key, start, end_id) do
+    actual_start = if start == "-" do
+      case Server.Streamstore.get_first_id(stream_key) do
+        {:ok, first_id} -> first_id
+        {:error, _} -> "0-0"  # Use a default start if the stream is empty
+      end
+    else
+      start
+    end
+
+    case Server.Streamstore.get_range(stream_key, actual_start, end_id) do
       {:ok, entries} ->
-        Logger.info(entries)
+        Logger.info("Got entries from Streamstore: #{inspect(entries)}")
         response = format_xrange_response(entries)
-        Logger.info(response)
+        Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
         write_line(response, client)
       {:error, message} ->
+        Logger.error("Error in XRANGE: #{message}")
         error_response = "-ERR #{message}\r\n"
         write_line(error_response, client)
     end
@@ -825,31 +835,10 @@ require Logger
 
     Logger.info("Formatted entries: #{inspect(formatted_entries)}")
 
-    # packed_response = pack_xrange_response(formatted_entries)
-    # Logger.info("Packed response: #{inspect(packed_response, limit: :infinity)}")
-
-    # packed_response
     packed_response = Server.Protocol.pack(formatted_entries)
     Logger.info("Packed response: #{inspect(packed_response, limit: :infinity)}")
 
     IO.iodata_to_binary(packed_response)
-  end
-
-  defp pack_xrange_response(entries) do
-    outer_array = ["*#{length(entries)}\r\n"]
-
-    packed_entries = Enum.map(entries, fn [id, values] ->
-      [
-        "*2\r\n",
-        "$#{byte_size(id)}\r\n#{id}\r\n",
-        "*#{length(values)}\r\n",
-        Enum.map(values, fn value ->
-          "$#{byte_size(value)}\r\n#{value}\r\n"
-        end)
-      ]
-    end)
-
-    IO.iodata_to_binary([outer_array | packed_entries])
   end
 
   #--------------------------------------------------------------------

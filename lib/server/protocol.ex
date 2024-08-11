@@ -37,27 +37,6 @@ defmodule Server.Protocol do
 
   """
 
-  # @spec pack(binary | [binary]) :: iodata
-
-  # def pack(item) when not is_list(item) do
-  #   item = to_string(item)
-  #   [?$, Integer.to_string(byte_size(item)), @crlf_iodata, item, @crlf_iodata]
-  # end
-
-  # def pack(items) when is_list(items) do
-  #   pack(items, [], 0)
-  # end
-
-  # defp pack([item | rest], acc, count) do
-  #   item = to_string(item)
-  #   new_acc = [acc, [?$, Integer.to_string(byte_size(item)), @crlf_iodata, item, @crlf_iodata]]
-  #   pack(rest, new_acc, count + 1)
-  # end
-
-  # defp pack([], acc, count) do
-  #   [?*, Integer.to_string(count), @crlf_iodata, acc]
-  # end
-
   @spec pack(binary | [binary] | [[binary]]) :: iodata
 
   def pack(item) when not is_list(item) do
