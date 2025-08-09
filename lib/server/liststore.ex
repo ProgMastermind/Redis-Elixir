@@ -82,6 +82,20 @@ defmodule Server.ListStore do
   def get(key), do: Agent.get(__MODULE__, &Map.get(&1, key))
 
   @doc """
+  Return the length of the list stored at `key`.
+
+  If the list does not exist, returns 0.
+  """
+  def llen(key) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        list when is_list(list) -> length(list)
+        _ -> 0
+      end
+    end)
+  end
+
+  @doc """
   Return a sublist from start to stop (inclusive) using 0-based indices.
 
   Semantics (aligned with the user's LRANGE spec):

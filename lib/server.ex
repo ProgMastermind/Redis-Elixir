@@ -855,6 +855,16 @@ defmodule Server do
     end
   end
 
+  defp execute_command("LLEN", [key], client) do
+    if Server.ClientState.in_transaction?(client) do
+      Server.ClientState.add_command(client, ["LLEN", key])
+      write_line("+QUEUED\r\n", client)
+    else
+      len = Server.ListStore.llen(key)
+      write_line(":#{len}\r\n", client)
+    end
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
@@ -1137,6 +1147,7 @@ defmodule Server do
       ["GET" | args] -> execute_get_command(args, client)
       ["INCR" | args] -> execute_incr_command(args, client)
       ["LRANGE" | args] -> execute_lrange_command(args, client)
+      ["LLEN" | args] -> execute_llen_command(args, client)
       _ -> "-ERR Unknown command '#{Enum.at(command, 0)}'\r\n"
     end
   end
@@ -1187,6 +1198,11 @@ defmodule Server do
     stop_index = String.to_integer(stop_str)
     elements = Server.ListStore.lrange(key, start_index, stop_index)
     Server.Protocol.pack(elements) |> IO.iodata_to_binary()
+  end
+
+  defp execute_llen_command([key], _client) do
+    len = Server.ListStore.llen(key)
+    ":#{len}\r\n"
   end
 
   defp write_line(line, client) do
