@@ -17,6 +17,14 @@ defmodule Server.ListStore do
   def rpush(key, element), do: rpush_many(key, [element])
 
   @doc """
+  Prepend `element` to the list at `key`.
+
+  If the list does not exist, it is created. Returns the length of the list
+  after the push, as per Redis LPUSH semantics.
+  """
+  def lpush(key, element), do: lpush_many(key, [element])
+
+  @doc """
   Append multiple `elements` to the list at `key` in order.
 
   If the list does not exist, it is created with the given elements. Returns
@@ -36,6 +44,33 @@ defmodule Server.ListStore do
         _other ->
           # Wrong type; reset to list for this stage's scope
           new_list = elements
+          {length(new_list), Map.put(state, key, new_list)}
+      end
+    end)
+  end
+
+  @doc """
+  Prepend multiple `elements` to the list at `key`.
+
+  When multiple elements are provided, they are pushed from left to right,
+  resulting in the last provided element being at the leftmost position, e.g.,
+  LPUSH key "a" "b" "c" => ["c", "b", "a", ...].
+  Returns the length of the list after the push.
+  """
+  def lpush_many(key, elements) when is_list(elements) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        nil ->
+          new_list = Enum.reverse(elements)
+          {length(new_list), Map.put(state, key, new_list)}
+
+        list when is_list(list) ->
+          updated = Enum.reverse(elements) ++ list
+          {length(updated), Map.put(state, key, updated)}
+
+        _other ->
+          # Wrong type; reset to list for this stage's scope
+          new_list = Enum.reverse(elements)
           {length(new_list), Map.put(state, key, new_list)}
       end
     end)

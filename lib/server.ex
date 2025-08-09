@@ -831,6 +831,17 @@ defmodule Server do
     write_line(":#{new_len}\r\n", client)
   end
 
+  defp execute_command("LPUSH", [key | elements], client) do
+    new_len =
+      case elements do
+        [] -> 0
+        [single] -> Server.ListStore.lpush(key, single)
+        many -> Server.ListStore.lpush_many(key, many)
+      end
+
+    write_line(":#{new_len}\r\n", client)
+  end
+
   defp execute_command("LRANGE", [key, start_str, stop_str], client) do
     if Server.ClientState.in_transaction?(client) do
       Server.ClientState.add_command(client, ["LRANGE", key, start_str, stop_str])
