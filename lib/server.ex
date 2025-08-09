@@ -14,6 +14,7 @@ defmodule Server do
       Server.Replicationstate,
       Server.Commandbuffer,
       Server.Clientbuffer,
+      Server.ListBlock,
       Server.ListStore,
       Server.Bytes,
       Server.Acknowledge,
@@ -828,6 +829,7 @@ defmodule Server do
         many -> Server.ListStore.rpush_many(key, many)
       end
 
+    maybe_unblock_waiter_for_push(key)
     write_line(":#{new_len}\r\n", client)
   end
 
@@ -839,6 +841,7 @@ defmodule Server do
         many -> Server.ListStore.lpush_many(key, many)
       end
 
+    maybe_unblock_waiter_for_push(key)
     write_line(":#{new_len}\r\n", client)
   end
 
@@ -901,6 +904,21 @@ defmodule Server do
     else
       len = Server.ListStore.llen(key)
       write_line(":#{len}\r\n", client)
+    end
+  end
+
+  defp execute_command("BLPOP", args, client) do
+    # BLPOP key [key ...] timeout
+    case Enum.split(args, -1) do
+      {[], _} ->
+        write_line("-ERR wrong number of arguments for 'blpop' command\r\n", client)
+      {keys, [timeout_str]} ->
+        with {timeout_secs, ""} <- Integer.parse(to_string(timeout_str)),
+             true <- timeout_secs >= 0 do
+          handle_blpop(keys, timeout_secs, client)
+        else
+          _ -> write_line("-ERR invalid timeout\r\n", client)
+        end
     end
   end
 
@@ -1267,5 +1285,69 @@ defmodule Server do
 
   defp write_line(line, client) do
     :gen_tcp.send(client, line)
+  end
+
+  defp handle_blpop(keys, timeout_secs, client) do
+    # Try immediate pop in key order
+    case Enum.find_value(keys, fn key ->
+           case Server.ListStore.lpop(key) do
+             {:ok, value} -> {key, value}
+             :empty -> nil
+           end
+         end) do
+      {key, value} ->
+        response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+        write_line(response, client)
+
+      nil ->
+        if timeout_secs == 0 do
+          block_indefinitely(keys, client)
+        else
+          block_with_timeout(keys, timeout_secs, client)
+        end
+    end
+  end
+
+  defp block_indefinitely(keys, client) do
+    ref = make_ref()
+    Server.ListBlock.add_waiter(keys, self(), client, ref)
+
+    receive do
+      {:list_pushed, key, value, ^ref} ->
+        response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+        write_line(response, client)
+    end
+  end
+
+  defp block_with_timeout(keys, timeout_secs, client) do
+    ref = make_ref()
+    Server.ListBlock.add_waiter(keys, self(), client, ref)
+
+    receive do
+      {:list_pushed, key, value, ^ref} ->
+        response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+        write_line(response, client)
+    after
+      timeout_secs * 1000 ->
+        # Remove waiter and return null bulk string
+        Server.ListBlock.remove_waiter_by_ref(ref)
+        write_line("$-1\r\n", client)
+    end
+  end
+
+  defp maybe_unblock_waiter_for_push(key) do
+    case Server.ListBlock.take_waiter(key) do
+      {:ok, %{ref: ref, client: client}} ->
+        # Pop from the same key to deliver the element to the waiter
+        case Server.ListStore.lpop(key) do
+          {:ok, value} ->
+            send(self(), {:list_pushed, key, value, ref})
+            # Directly send to the waiting client's socket
+            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+            :gen_tcp.send(client, response)
+          :empty -> :ok
+        end
+      :empty -> :ok
+    end
   end
 end
