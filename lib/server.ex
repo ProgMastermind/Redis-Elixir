@@ -855,6 +855,22 @@ defmodule Server do
     end
   end
 
+  defp execute_command("LPOP", [key], client) do
+    if Server.ClientState.in_transaction?(client) do
+      Server.ClientState.add_command(client, ["LPOP", key])
+      write_line("+QUEUED\r\n", client)
+    else
+      case Server.ListStore.lpop(key) do
+        {:ok, value} ->
+          response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
+          write_line(response, client)
+
+        :empty ->
+          write_line("$-1\r\n", client)
+      end
+    end
+  end
+
   defp execute_command("LLEN", [key], client) do
     if Server.ClientState.in_transaction?(client) do
       Server.ClientState.add_command(client, ["LLEN", key])
@@ -1147,6 +1163,7 @@ defmodule Server do
       ["GET" | args] -> execute_get_command(args, client)
       ["INCR" | args] -> execute_incr_command(args, client)
       ["LRANGE" | args] -> execute_lrange_command(args, client)
+      ["LPOP" | args] -> execute_lpop_command(args, client)
       ["LLEN" | args] -> execute_llen_command(args, client)
       _ -> "-ERR Unknown command '#{Enum.at(command, 0)}'\r\n"
     end
@@ -1198,6 +1215,13 @@ defmodule Server do
     stop_index = String.to_integer(stop_str)
     elements = Server.ListStore.lrange(key, start_index, stop_index)
     Server.Protocol.pack(elements) |> IO.iodata_to_binary()
+  end
+
+  defp execute_lpop_command([key], _client) do
+    case Server.ListStore.lpop(key) do
+      {:ok, value} -> Server.Protocol.pack(value) |> IO.iodata_to_binary()
+      :empty -> "$-1\r\n"
+    end
   end
 
   defp execute_llen_command([key], _client) do

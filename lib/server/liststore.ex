@@ -96,6 +96,31 @@ defmodule Server.ListStore do
   end
 
   @doc """
+  Remove and return the first element from the list at `key`.
+
+  Returns `{:ok, value}` if an element was popped, or `:empty` if the list
+  is empty or does not exist.
+  """
+  def lpop(key) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        [head | tail] ->
+          {{:ok, head}, Map.put(state, key, tail)}
+
+        [] ->
+          {:empty, Map.put(state, key, [])}
+
+        nil ->
+          {:empty, state}
+
+        _other ->
+          # For non-list types (out of scope for strict type errors in this stage)
+          {:empty, state}
+      end
+    end)
+  end
+
+  @doc """
   Return a sublist from start to stop (inclusive) using 0-based indices.
 
   Semantics (aligned with the user's LRANGE spec):
