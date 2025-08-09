@@ -62,20 +62,17 @@ defmodule Server.ListStore do
         list when is_list(list) ->
           len = length(list)
 
-          cond do
-            len == 0 ->
-              []
+          if len == 0 do
+            []
+          else
+            start_pos = normalize_index(start_index, len)
+            stop_pos = normalize_index(stop_index, len) |> min(len - 1)
 
-            start_index < 0 ->
-              last = min(stop_index, len - 1)
-              take_slice(list, 0, last)
-
-            start_index >= len ->
-              []
-
-            true ->
-              last = min(stop_index, len - 1)
-              take_slice(list, start_index, last)
+            cond do
+              start_pos >= len -> []
+              start_pos > stop_pos -> []
+              true -> take_slice(list, start_pos, stop_pos)
+            end
           end
 
         _ ->
@@ -86,4 +83,11 @@ defmodule Server.ListStore do
 
   defp take_slice(_list, start_idx, stop_idx) when stop_idx < start_idx, do: []
   defp take_slice(list, start_idx, stop_idx), do: Enum.slice(list, start_idx..stop_idx)
+
+  defp normalize_index(index, _len) when index >= 0, do: index
+
+  defp normalize_index(index, len) do
+    pos = len + index
+    if pos < 0, do: 0, else: pos
+  end
 end
