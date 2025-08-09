@@ -14,6 +14,7 @@ defmodule Server do
       Server.Replicationstate,
       Server.Commandbuffer,
       Server.Clientbuffer,
+      Server.ListStore,
       Server.Bytes,
       Server.Acknowledge,
       Server.Pendingwrites,
@@ -34,8 +35,10 @@ defmodule Server do
   end
 
   defp parse_args do
-    {opts, _, _} = OptionParser.parse(System.argv(),
-      switches: [port: :integer, replicaof: :string, dir: :string, dbfilename: :string])
+    {opts, _, _} =
+      OptionParser.parse(System.argv(),
+        switches: [port: :integer, replicaof: :string, dir: :string, dbfilename: :string]
+      )
 
     port = opts[:port] || 6379
     replica_of = parse_replicaof(opts[:replicaof])
@@ -46,6 +49,7 @@ defmodule Server do
   end
 
   defp parse_replicaof(nil), do: nil
+
   defp parse_replicaof(replicaof) do
     [host, port] = String.split(replicaof, " ")
     {host, String.to_integer(port)}
@@ -69,11 +73,13 @@ defmodule Server do
   """
   def listen(config) do
     IO.puts("Server listening on port #{config.port}")
-    {:ok, socket} = :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true, buffer: 1024*1024])
+
+    {:ok, socket} =
+      :gen_tcp.listen(config.port, [:binary, active: false, reuseaddr: true, buffer: 1024 * 1024])
 
     if config.replica_of do
       spawn(fn ->
-         connect_to_master(config.replica_of, config.port)
+        connect_to_master(config.replica_of, config.port)
       end)
     end
 
@@ -81,18 +87,28 @@ defmodule Server do
   end
 
   defp connect_to_master({master_host, master_port}, replica_port) do
-    case :gen_tcp.connect(to_charlist(master_host), master_port, [:binary, active: false, buffer: 8192]) do
+    case :gen_tcp.connect(to_charlist(master_host), master_port, [
+           :binary,
+           active: false,
+           buffer: 8192
+         ]) do
       {:ok, socket} ->
         {:ok, {remote_address, remote_port}} = :inet.peername(socket)
         {:ok, {local_address, local_port}} = :inet.sockname(socket)
-        Logger.info("Connected to #{:inet.ntoa(remote_address)}:#{remote_port} from #{:inet.ntoa(local_address)}:#{local_port}")
+
+        Logger.info(
+          "Connected to #{:inet.ntoa(remote_address)}:#{remote_port} from #{:inet.ntoa(local_address)}:#{local_port}"
+        )
+
         case perform_handshake(socket, replica_port) do
           :ok ->
             Logger.info("Handshake completed successfully")
             parse_commands(socket)
+
           {:error, reason} ->
             Logger.error("Handshake failed: #{inspect(reason)}")
         end
+
       {:error, reason} ->
         Logger.error("Failed to connect to master: #{inspect(reason)}")
     end
@@ -129,9 +145,11 @@ defmodule Server do
 
   defp send_command(socket, command, expected_response) do
     packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+
     case :gen_tcp.send(socket, packed_command) do
       :ok ->
         receive_response(socket, expected_response)
+
       {:error, reason} ->
         IO.puts("Failed to send command: #{inspect(command)}")
         {:error, reason}
@@ -141,14 +159,21 @@ defmodule Server do
   defp receive_response(socket, expected_response) do
     case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, received_data} ->
-        Logger.debug("Received raw bytes: #{inspect(received_data, limit: :infinity, binaries: :as_binaries)}")
+        Logger.debug(
+          "Received raw bytes: #{inspect(received_data, limit: :infinity, binaries: :as_binaries)}"
+        )
+
         if received_data == expected_response do
           Logger.debug("Received expected response")
           :ok
         else
-          Logger.warning("Unexpected response. Expected: #{inspect(expected_response)}, Received: #{inspect(received_data)}")
+          Logger.warning(
+            "Unexpected response. Expected: #{inspect(expected_response)}, Received: #{inspect(received_data)}"
+          )
+
           {:error, :unexpected_response}
         end
+
       {:error, reason} ->
         Logger.error("Error receiving response: #{inspect(reason)}")
         {:error, reason}
@@ -157,28 +182,32 @@ defmodule Server do
 
   defp send_psync(socket) do
     packed_command = Server.Protocol.pack(["PSYNC", "?", "-1"]) |> IO.iodata_to_binary()
+
     case :gen_tcp.send(socket, packed_command) do
       :ok ->
         receive_psync_response(socket)
+
       {:error, reason} ->
         IO.puts("Failed to send PSYNC command")
         {:error, reason}
     end
   end
 
-
   defp receive_psync_response(socket) do
     case :gen_tcp.recv(socket, 56, 5000) do
       {:ok, data} ->
         Logger.debug("Received PSYNC response: #{inspect(data)}")
+
         case parse_psync_response(data) do
           {:ok, repl_id, offset, _remaining_data} ->
             Logger.info("PSYNC successful. Replication ID: #{repl_id}, Offset: #{offset}")
             handle_rdb_and_commands(socket)
+
           {:error, reason} ->
             Logger.warning("Error parsing PSYNC response: #{reason}")
             {:error, reason}
         end
+
       {:error, reason} ->
         Logger.error("Error receiving PSYNC response: #{inspect(reason)}")
         {:error, reason}
@@ -190,6 +219,7 @@ defmodule Server do
       {:ok, rdb_data} ->
         Logger.info("RDB data received, length: #{byte_size(rdb_data)}")
         :ok
+
       {:error, reason} ->
         Logger.error("Error reading RDB: #{inspect(reason)}")
         {:error, reason}
@@ -201,13 +231,16 @@ defmodule Server do
       {:ok, data} ->
         Logger.debug("Received data chunk: #{inspect(data)}, bytes: #{byte_size(data)}")
         Server.Bytes.increment_offset(byte_size(data))
+
         case parse_command(data) do
           {:commands, commands} ->
             Enum.each(commands, fn command ->
               execute_replica_command(socket, command)
             end)
         end
+
         parse_commands(socket)
+
       {:error, closed} ->
         {:error, closed}
     end
@@ -215,10 +248,12 @@ defmodule Server do
 
   defp parse_command(data) do
     Logger.debug("Attempting to parse commands from data")
+
     case parse_multiple_commands(data, []) do
       {:ok, commands} ->
         Logger.info("Successfully parsed commands: #{inspect(commands)}")
         {:commands, commands}
+
       {:continue, remaining_data} ->
         Logger.debug("Incomplete command(s), continuing to receive")
         {:continue, remaining_data, 0}
@@ -227,22 +262,27 @@ defmodule Server do
 
   defp parse_multiple_commands(data, acc) do
     Logger.debug("Parsing data: #{inspect(data)}")
+
     case Server.Protocol.parse(data) do
       {:ok, parsed_command, rest} ->
         Logger.debug("Parsed command: #{inspect(parsed_command)}, remaining: #{inspect(rest)}")
+
         case parsed_command do
           [_command | _args] = command ->
             new_acc = acc ++ [command]
+
             if rest == "" do
               Logger.debug("Finished parsing all commands: #{inspect(new_acc)}")
               {:ok, new_acc}
             else
               parse_multiple_commands(rest, new_acc)
             end
+
           _ ->
             Logger.warning("Unexpected command format: #{inspect(parsed_command)}")
             {:ok, acc}
         end
+
       {:continuation, _} ->
         if acc == [] do
           Logger.debug("Incomplete data, need more: #{inspect(data)}")
@@ -254,15 +294,16 @@ defmodule Server do
     end
   end
 
-
   defp parse_psync_response(data) do
     parts = String.split(data, "\r\n", parts: 2)
 
     case parts do
       [psync_part, rdb_part] ->
         parse_psync_part(psync_part, rdb_part)
+
       [psync_part] ->
         parse_psync_part(psync_part, "")
+
       _ ->
         {:error, :invalid_psync_response}
     end
@@ -273,40 +314,45 @@ defmodule Server do
       [repl_id, offset_str] ->
         offset = String.to_integer(offset_str)
         {:ok, repl_id, offset, rdb_part}
+
       nil ->
         {:error, :invalid_psync_response}
     end
   end
 
-
-  #---------------------------------------------------------
+  # ---------------------------------------------------------
   # ACK Commands
 
   defp execute_replica_command(socket, command) do
     case command do
       ["SET" | args] ->
         execute_set_command(["SET" | args])
+
       ["REPLCONF", "GETACK", "*"] ->
         send_replconf_ack(socket)
+
       ["PING"] ->
         Logger.info("PING has executed")
+
       _ ->
         Logger.warning("Unhandled command from master : #{inspect(command)}")
     end
   end
 
-
   defp execute_set_command([command | args]) do
     case String.upcase(command) do
       "SET" ->
         [key, value | rest] = args
+
         case rest do
           ["PX", time] ->
             time_ms = String.to_integer(time)
             Server.Store.update(key, value, time_ms)
+
           [] ->
             Server.Store.update(key, value)
         end
+
       _ ->
         Logger.warning("Unhandled command from the master: #{command}")
     end
@@ -317,22 +363,24 @@ defmodule Server do
     Logger.info("Executing REPLCONF GETACK. Current offset: #{offset}")
     command = ["REPLCONF", "ACK", "#{offset}"]
     packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+
     case :gen_tcp.send(socket, packed_command) do
       :ok ->
         Logger.info("Sent REPLCONF ACK response: #{inspect(packed_command)}")
+
       {:error, reason} ->
         Logger.error("Failed to send REPLCONF ACK: #{inspect(reason)}")
     end
   end
 
-
-  #----------------------------------------------------------------------------------
+  # ----------------------------------------------------------------------------------
   # Server Code
   defp loop_acceptor(socket, config) do
     case :gen_tcp.accept(socket) do
       {:ok, client} ->
         spawn(fn -> serve(client, config) end)
         loop_acceptor(socket, config)
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -351,7 +399,6 @@ defmodule Server do
     end
   end
 
-
   defp read_line(client) do
     case :gen_tcp.recv(client, 0) do
       {:ok, data} -> data
@@ -360,13 +407,18 @@ defmodule Server do
   end
 
   defp process_command(command, client, config) do
-    IO.puts("Received command: #{inspect(command)}")  # Debug line
+    # Debug line
+    IO.puts("Received command: #{inspect(command)}")
+
     case Server.Protocol.parse(command) do
       {:ok, parsed_data, _rest} ->
-        IO.puts("Parsed data: #{inspect(parsed_data)}")  # Debug line
+        # Debug line
+        IO.puts("Parsed data: #{inspect(parsed_data)}")
         handle_command(parsed_data, client, config)
+
       {:continuation, _fun} ->
-        IO.puts("Incomplete command")  # Debug line
+        # Debug line
+        IO.puts("Incomplete command")
         write_line("-ERR Incomplete command\r\n", client)
     end
   end
@@ -375,11 +427,11 @@ defmodule Server do
     case parsed_data do
       [command | args] ->
         execute_command_with_config(String.upcase(to_string(command)), args, client, config)
+
       _ ->
         write_line("-ERR Invalid command format\r\n", client)
     end
   end
-
 
   # ---------------------------------------------------------------
   # Helpers
@@ -392,12 +444,15 @@ defmodule Server do
   end
 
   defp empty_rdb_file do
-    content = Base.decode64!("UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==")
+    content =
+      Base.decode64!(
+        "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog=="
+      )
+
     IO.puts("RDB file size: #{byte_size(content)} bytes")
     IO.puts("RDB file header: #{inspect(binary_part(content, 0, 9))}")
     content
   end
-
 
   defp send_buffered_commands_to_replica do
     commands = Server.Commandbuffer.get_and_clear_commands()
@@ -410,8 +465,11 @@ defmodule Server do
     Enum.each(clients, fn client ->
       Enum.each(commands, fn command ->
         packed_command = Server.Protocol.pack(command) |> IO.iodata_to_binary()
+
         case :gen_tcp.send(client, packed_command) do
-          :ok -> :ok
+          :ok ->
+            :ok
+
           {:error, reason} ->
             IO.puts("Failed to send command to replica: #{inspect(reason)}")
         end
@@ -426,29 +484,29 @@ defmodule Server do
     case command do
       "INFO" when args == ["replication"] ->
         handle_info_replication(client, config)
+
       _ ->
         execute_command(command, args, client)
     end
   end
 
-
   defp handle_info_replication(client, config) do
+    response =
+      case config.replica_of do
+        nil ->
+          """
+          role:master
+          master_replid:#{replication_id()}
+          master_repl_offset:#{replication_offset()}
+          """
 
-    response = case config.replica_of do
-      nil ->
-        """
-        role:master
-        master_replid:#{replication_id()}
-        master_repl_offset:#{replication_offset()}
-        """
-      {_, _} ->
-        "role:slave"
-    end
+        {_, _} ->
+          "role:slave"
+      end
 
     packed_response = Server.Protocol.pack(response) |> IO.iodata_to_binary()
     write_line(packed_response, client)
   end
-
 
   defp execute_command("REPLCONF", args, client) do
     Logger.info("Received REPLCONF with args: #{inspect(args)}")
@@ -466,9 +524,9 @@ defmodule Server do
 
       ["ACK", offset] ->
         # Handle ACK from replica
-        Server.Acknowledge.increment_ack_count();
+        Server.Acknowledge.increment_ack_count()
         Logger.info("Received ACK from replica with offset: #{offset}")
-        count = Server.Acknowledge.get_ack_count();
+        count = Server.Acknowledge.get_ack_count()
         Logger.info("Received acknowledgement from #{count} replicas")
         :ok
 
@@ -479,7 +537,6 @@ defmodule Server do
     end
   end
 
-
   defp execute_command("PSYNC", _args, client) do
     try do
       response = "+FULLRESYNC #{replication_id()} #{replication_offset()}\r\n"
@@ -489,6 +546,7 @@ defmodule Server do
     catch
       :error, :closed ->
         Logger.warning("Connection closed while executing PSYNC")
+
       error ->
         Logger.error("Error executing PSYNC: #{inspect(error)}")
     end
@@ -508,10 +566,12 @@ defmodule Server do
         case rest do
           [command, time] ->
             command = String.upcase(to_string(command))
+
             if command == "PX" do
               time_ms = String.to_integer(time)
               Server.Store.update(key, value, time_ms)
             end
+
           [] ->
             Server.Store.update(key, value)
         end
@@ -528,7 +588,6 @@ defmodule Server do
           write_line("-ERR Internal server error\r\n", client)
       end
     end
-
   end
 
   defp execute_command("KEYS", ["*"], client) do
@@ -538,14 +597,15 @@ defmodule Server do
     write_line(response, client)
   end
 
-
-  defp execute_command("GET", [key] , client) do
+  defp execute_command("GET", [key], client) do
     IO.puts("Executing GET command for key: #{key}")
+
     if Server.ClientState.in_transaction?(client) do
       Server.ClientState.add_command(client, ["GET", key])
       write_line("+QUEUED\r\n", client)
     else
       rdb_state = Server.RdbStore.get_state()
+
       case Map.fetch(rdb_state, key) do
         {:ok, value} ->
           # Logger.info("Value found in RDB store: #{inspect(value)}")
@@ -557,6 +617,7 @@ defmodule Server do
               else
                 write_line("$-1\r\n", client)
               end
+
             _ ->
               response = Server.Protocol.pack(value) |> IO.iodata_to_binary()
               write_line(response, client)
@@ -575,7 +636,6 @@ defmodule Server do
           end
       end
     end
-
   end
 
   defp execute_command("INCR", [key], client) do
@@ -590,9 +650,11 @@ defmodule Server do
               increased_value = int_value + 1
               Server.Store.update(key, Integer.to_string(increased_value))
               write_line(":#{increased_value}\r\n", client)
+
             :error ->
               write_line("-ERR value is not an integer or out of range\r\n", client)
           end
+
         {:error, _reason} ->
           Server.Store.update(key, "1")
           write_line(":1\r\n", client)
@@ -611,15 +673,17 @@ defmodule Server do
 
   defp execute_command("EXEC", _args, client) do
     Logger.info("EXEC is executing")
+
     if Server.ClientState.in_transaction?(client) do
       queued_commands = Server.ClientState.get_and_clear_commands(client)
       Logger.info("Queued commands: #{queued_commands}")
       Server.ClientState.end_transaction(client)
 
-      results = Enum.map(queued_commands, fn command->
-        Logger.info("Executing command: #{inspect(command)}")
-        execute_queued_command(command, client)
-      end)
+      results =
+        Enum.map(queued_commands, fn command ->
+          Logger.info("Executing command: #{inspect(command)}")
+          execute_queued_command(command, client)
+        end)
 
       response = "*#{length(results)}\r\n" <> Enum.join(results)
       write_line(response, client)
@@ -645,10 +709,12 @@ defmodule Server do
         result = Server.Streamstore.add_entry(stream_key, final_id, entry_map)
         response = Server.Protocol.pack(result) |> IO.iodata_to_binary()
         write_line(response, client)
+
       :ok ->
         result = Server.Streamstore.add_entry(stream_key, id, entry_map)
         response = Server.Protocol.pack(result) |> IO.iodata_to_binary()
         write_line(response, client)
+
       {:error, message} ->
         error_response = "-ERR #{message}\r\n"
         write_line(error_response, client)
@@ -659,31 +725,36 @@ defmodule Server do
     cond do
       Server.Streamstore.get_stream(key) != nil ->
         write_line("+stream\r\n", client)
+
       Server.Store.get_value_or_false(key) != {:error, :not_found} ->
         write_line("+string\r\n", client)
+
       true ->
         write_line("+none\r\n", client)
     end
   end
 
   defp execute_command("XRANGE", [stream_key, start, end_id], client) do
-    actual_start = if start == "-" do
-      case Server.Streamstore.get_first_id(stream_key) do
-        {:ok, first_id} -> first_id
-        {:error, _} -> "0-0"  # Use a default start if the stream is empty
+    actual_start =
+      if start == "-" do
+        case Server.Streamstore.get_first_id(stream_key) do
+          {:ok, first_id} -> first_id
+          # Use a default start if the stream is empty
+          {:error, _} -> "0-0"
+        end
+      else
+        start
       end
-    else
-      start
-    end
 
-    actual_end = if end_id == "+" do
-      case Server.Streamstore.get_last_id(stream_key) do
-        {:ok, last_id} -> last_id
-        {:error, _} -> "0.0"
+    actual_end =
+      if end_id == "+" do
+        case Server.Streamstore.get_last_id(stream_key) do
+          {:ok, last_id} -> last_id
+          {:error, _} -> "0.0"
+        end
+      else
+        end_id
       end
-    else
-      end_id
-    end
 
     case Server.Streamstore.get_range(stream_key, actual_start, actual_end) do
       {:ok, entries} ->
@@ -691,6 +762,7 @@ defmodule Server do
         response = format_xrange_response(entries)
         Logger.info("Formatted response: #{inspect(response, limit: :infinity)}")
         write_line(response, client)
+
       {:error, message} ->
         Logger.error("Error in XRANGE: #{message}")
         error_response = "-ERR #{message}\r\n"
@@ -698,12 +770,12 @@ defmodule Server do
     end
   end
 
-
   defp execute_command("XREAD", args, client) do
     case Enum.split_while(args, fn arg -> arg != "streams" end) do
       {["block", timeout | _], ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
         execute_xread_blocking(stream_keys, ids, String.to_integer(timeout), client)
+
       {_, ["streams" | rest]} ->
         {stream_keys, ids} = Enum.split(rest, div(length(rest), 2))
         response = execute_xread_default(stream_keys, ids)
@@ -723,23 +795,24 @@ defmodule Server do
         :gen_tcp.send(replica_socket, Server.Protocol.pack(["REPLCONF", "GETACK", "*"]))
       end)
 
-
       :ok = wait_and_respond(timeout, client)
     else
-      replica_count = Server.Clientbuffer.get_client_count();
+      replica_count = Server.Clientbuffer.get_client_count()
       write_line(":#{replica_count}\r\n", client)
     end
-
   end
 
   defp execute_command("CONFIG", ["GET", param], client) do
     value = Server.Config.get_config(param)
     Logger.info("Value for a dir: #{value}")
-    response = if value do
-      Server.Protocol.pack([param, value]) |> IO.iodata_to_binary()
-    else
-      "$-1\r\n"
-    end
+
+    response =
+      if value do
+        Server.Protocol.pack([param, value]) |> IO.iodata_to_binary()
+      else
+        "$-1\r\n"
+      end
+
     write_line(response, client)
   end
 
@@ -747,11 +820,16 @@ defmodule Server do
     write_line("+PONG\r\n", client)
   end
 
+  defp execute_command("RPUSH", [key, element], client) do
+    new_len = Server.ListStore.rpush(key, element)
+    write_line(":#{new_len}\r\n", client)
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
 
-  #------------------------------------------------------------------------------
+  # ------------------------------------------------------------------------------
   defp send_rdb_file(client) do
     try do
       rdb_content = empty_rdb_file()
@@ -761,32 +839,14 @@ defmodule Server do
     catch
       :error, :closed ->
         Logger.warning("Connection closed while sending RDB file")
+
       error ->
         Logger.error("Error sending RDB file: #{inspect(error)}")
     end
   end
 
-
   defp process_id(stream_key, "*") do
     generate_full_id(stream_key)
-  end
-
-  defp generate_full_id(stream_key) do
-    current_time = System.system_time(:millisecond)
-    entries = Server.Streamstore.get_stream(stream_key)
-    case entries do
-      nil ->
-        {:ok, "#{current_time}-0"}
-      [] ->
-        {:ok, "#{current_time}-0"}
-      [{last_id, _} | _] ->
-        {last_time, last_seq} = parse_id(last_id)
-        if current_time > last_time do
-          {:ok, "#{current_time}-0"}
-        else
-          {:ok, "#{current_time}-#{last_seq + 1}"}
-        end
-    end
   end
 
   defp process_id(stream_key, id) do
@@ -795,32 +855,65 @@ defmodule Server do
         case Integer.parse(time_str) do
           {time, ""} ->
             generate_id(stream_key, time)
+
           _ ->
             {:error, "Invalid time format"}
         end
+
       [time_str, seq_str] ->
         # Logger.info("#{time_str}-#{seq_str}")
         validate_explicit_id(stream_key, "#{time_str}-#{seq_str}")
+
       _ ->
         {:error, "Invalid ID format"}
     end
   end
 
+  defp generate_full_id(stream_key) do
+    current_time = System.system_time(:millisecond)
+    entries = Server.Streamstore.get_stream(stream_key)
+
+    case entries do
+      nil ->
+        {:ok, "#{current_time}-0"}
+
+      [] ->
+        {:ok, "#{current_time}-0"}
+
+      [{last_id, _} | _] ->
+        {last_time, last_seq} = parse_id(last_id)
+
+        if current_time > last_time do
+          {:ok, "#{current_time}-0"}
+        else
+          {:ok, "#{current_time}-#{last_seq + 1}"}
+        end
+    end
+  end
 
   defp generate_id(stream_key, time) do
     entries = Server.Streamstore.get_stream(stream_key)
+
     case entries do
       nil ->
         if time == 0, do: {:ok, "0-1"}, else: {:ok, "#{time}-0"}
+
       [] ->
         if time == 0, do: {:ok, "0-1"}, else: {:ok, "#{time}-0"}
+
       [{last_id, _} | _] ->
         {:ok, {last_time, last_seq}} = parse_id(last_id)
         # Logger.info("#{last_time}:#{last_seq}")
         cond do
-          time > last_time -> {:ok, "#{time}-0"}
-          time == last_time -> {:ok, "#{time}-#{last_seq + 1}"}
-          true -> {:error, "The ID specified in XADD is equal or smaller than the target stream top item"}
+          time > last_time ->
+            {:ok, "#{time}-0"}
+
+          time == last_time ->
+            {:ok, "#{time}-#{last_seq + 1}"}
+
+          true ->
+            {:error,
+             "The ID specified in XADD is equal or smaller than the target stream top item"}
         end
     end
   end
@@ -836,8 +929,10 @@ defmodule Server do
           case entries do
             nil ->
               :ok
+
             [] ->
               :ok
+
             [{last_id, _} | _] ->
               case parse_id(last_id) do
                 {:ok, {last_time, last_seq}} ->
@@ -845,13 +940,16 @@ defmodule Server do
                   if new_time > last_time or (new_time == last_time and new_seq > last_seq) do
                     :ok
                   else
-                    {:error, "The ID specified in XADD is equal or smaller than the target stream top item"}
+                    {:error,
+                     "The ID specified in XADD is equal or smaller than the target stream top item"}
                   end
+
                 :error ->
                   {:error, "Invalid last ID format"}
               end
           end
         end
+
       :error ->
         {:error, "Invalid ID format"}
     end
@@ -864,84 +962,100 @@ defmodule Server do
           {{time, ""}, {seq, ""}} -> {:ok, {time, seq}}
           _ -> :error
         end
-      _ -> :error
+
+      _ ->
+        :error
     end
   end
 
   defp execute_xread_blocking(stream_keys, ids, timeout, client) do
-    Logger.info("Executing blocking XREAD with keys: #{inspect(stream_keys)}, ids: #{inspect(ids)}, timeout: #{timeout}")
+    Logger.info(
+      "Executing blocking XREAD with keys: #{inspect(stream_keys)}, ids: #{inspect(ids)}, timeout: #{timeout}"
+    )
 
     Server.Streamstore.set_block_read_active(true, self())
 
-    actual_ids = Enum.map(Enum.zip(stream_keys, ids), fn {key, id} ->
-      if id == "$" do
-        case Server.Streamstore.get_last_id(key) do
-          {:ok, latest_id} -> latest_id
-          {:error, _} -> "0-0"
+    actual_ids =
+      Enum.map(Enum.zip(stream_keys, ids), fn {key, id} ->
+        if id == "$" do
+          case Server.Streamstore.get_last_id(key) do
+            {:ok, latest_id} -> latest_id
+            {:error, _} -> "0-0"
+          end
+        else
+          id
+        end
+      end)
+
+    result =
+      if timeout == 0 do
+        receive do
+          {:stream_update, updated_stream_key, id} ->
+            Logger.info(
+              "Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}"
+            )
+
+            if updated_stream_key in stream_keys do
+              Logger.info("Update matches watched stream, executing default XREAD")
+              execute_xread_default(stream_keys, actual_ids)
+            else
+              Logger.info("Update doesn't match watched stream, continuing to block")
+              execute_xread_blocking(stream_keys, actual_ids, timeout, client)
+            end
         end
       else
-        id
-      end
-    end)
+        ref = make_ref()
+        timer_ref = Process.send_after(self(), {:timeout, ref}, timeout)
 
-    result = if timeout == 0 do
-      receive do
-        {:stream_update, updated_stream_key, id} ->
-          Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
-          if updated_stream_key in stream_keys do
-            Logger.info("Update matches watched stream, executing default XREAD")
-            execute_xread_default(stream_keys, actual_ids)
-          else
-            Logger.info("Update doesn't match watched stream, continuing to block")
-            execute_xread_blocking(stream_keys, actual_ids, timeout, client)
-          end
-      end
-    else
-      ref = make_ref()
-      timer_ref = Process.send_after(self(), {:timeout, ref}, timeout)
+        receive do
+          {:timeout, ^ref} ->
+            Logger.info("XREAD BLOCK timed out")
+            "$-1\r\n"
 
-      receive do
-        {:timeout, ^ref} ->
-          Logger.info("XREAD BLOCK timed out")
-          "$-1\r\n"
+          {:stream_update, updated_stream_key, id} ->
+            Logger.info(
+              "Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}"
+            )
 
-        {:stream_update, updated_stream_key, id} ->
-          Logger.info("Received stream update for key: #{updated_stream_key}, ids: #{inspect(id)}")
-          Process.cancel_timer(timer_ref)
-          if updated_stream_key in stream_keys do
-            Logger.info("Update matches watched stream, executing default XREAD")
-            execute_xread_default(stream_keys, actual_ids)
-          else
-            Logger.info("Update doesn't match watched stream, continuing to block")
-            execute_xread_blocking(stream_keys, actual_ids, timeout, client)
-          end
+            Process.cancel_timer(timer_ref)
+
+            if updated_stream_key in stream_keys do
+              Logger.info("Update matches watched stream, executing default XREAD")
+              execute_xread_default(stream_keys, actual_ids)
+            else
+              Logger.info("Update doesn't match watched stream, continuing to block")
+              execute_xread_blocking(stream_keys, actual_ids, timeout, client)
+            end
+        end
       end
-    end
 
     Server.Streamstore.set_block_read_active(false)
     write_line(result, client)
   end
 
   defp execute_xread_default(stream_keys, ids) do
-    results = Enum.zip(stream_keys, ids)
-    |> Enum.map(fn {stream_key, id} ->
-      case Server.Streamstore.get_entries_after(stream_key, id) do
-        {:ok, entries} -> {stream_key, entries}
-        {:error, _} -> {stream_key, []}
-      end
-    end)
+    results =
+      Enum.zip(stream_keys, ids)
+      |> Enum.map(fn {stream_key, id} ->
+        case Server.Streamstore.get_entries_after(stream_key, id) do
+          {:ok, entries} -> {stream_key, entries}
+          {:error, _} -> {stream_key, []}
+        end
+      end)
 
     format_xread_response(results)
   end
 
-
   defp format_xread_response(results) do
-    formatted_results = Enum.map(results, fn {stream_key, entries} ->
-      formatted_entries = Enum.map(entries, fn {id, data} ->
-        [id, Enum.flat_map(data, fn {k, v} -> [k, v] end)]
+    formatted_results =
+      Enum.map(results, fn {stream_key, entries} ->
+        formatted_entries =
+          Enum.map(entries, fn {id, data} ->
+            [id, Enum.flat_map(data, fn {k, v} -> [k, v] end)]
+          end)
+
+        [stream_key, formatted_entries]
       end)
-      [stream_key, formatted_entries]
-    end)
 
     Server.Protocol.pack(formatted_results)
   end
@@ -949,17 +1063,19 @@ defmodule Server do
   defp format_xrange_response(entries) do
     Logger.info("Formatting entries: #{inspect(entries)}")
 
-    formatted_entries = Enum.map(entries, fn {id, entry} ->
-      case entry do
-        %{} ->
-          flattened_entry = Enum.flat_map(entry, fn {k, v} -> [k, v] end)
-          Logger.info("Flattened entry: #{inspect([id, flattened_entry])}")
-          [id, flattened_entry]
-        _ ->
-          Logger.warning("Unexpected entry format: #{inspect(entry)}")
-          [id, []]
-      end
-    end)
+    formatted_entries =
+      Enum.map(entries, fn {id, entry} ->
+        case entry do
+          %{} ->
+            flattened_entry = Enum.flat_map(entry, fn {k, v} -> [k, v] end)
+            Logger.info("Flattened entry: #{inspect([id, flattened_entry])}")
+            [id, flattened_entry]
+
+          _ ->
+            Logger.warning("Unexpected entry format: #{inspect(entry)}")
+            [id, []]
+        end
+      end)
 
     Logger.info("Formatted entries: #{inspect(formatted_entries)}")
 
@@ -996,13 +1112,16 @@ defmodule Server do
 
   defp execute_set_command([key, value | rest], _client) do
     Logger.info("Key: #{key}, Value: #{value}")
+
     case rest do
       ["PX", time] ->
         time_ms = String.to_integer(time)
         Server.Store.update(key, value, time_ms)
+
       [] ->
         Server.Store.update(key, value)
     end
+
     "+OK\r\n"
   end
 
@@ -1021,9 +1140,11 @@ defmodule Server do
             increased_value = int_value + 1
             Server.Store.update(key, Integer.to_string(increased_value))
             ":#{increased_value}\r\n"
+
           :error ->
             "-ERR value is not an integer or out of range\r\n"
         end
+
       {:error, _} ->
         Server.Store.update(key, "1")
         ":1\r\n"
@@ -1033,6 +1154,4 @@ defmodule Server do
   defp write_line(line, client) do
     :gen_tcp.send(client, line)
   end
-
-
 end
