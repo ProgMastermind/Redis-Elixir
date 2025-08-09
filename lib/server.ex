@@ -831,6 +831,19 @@ defmodule Server do
     write_line(":#{new_len}\r\n", client)
   end
 
+  defp execute_command("LRANGE", [key, start_str, stop_str], client) do
+    if Server.ClientState.in_transaction?(client) do
+      Server.ClientState.add_command(client, ["LRANGE", key, start_str, stop_str])
+      write_line("+QUEUED\r\n", client)
+    else
+      start_index = String.to_integer(start_str)
+      stop_index = String.to_integer(stop_str)
+      elements = Server.ListStore.lrange(key, start_index, stop_index)
+      response = Server.Protocol.pack(elements) |> IO.iodata_to_binary()
+      write_line(response, client)
+    end
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
@@ -1112,6 +1125,7 @@ defmodule Server do
       ["SET" | args] -> execute_set_command(args, client)
       ["GET" | args] -> execute_get_command(args, client)
       ["INCR" | args] -> execute_incr_command(args, client)
+      ["LRANGE" | args] -> execute_lrange_command(args, client)
       _ -> "-ERR Unknown command '#{Enum.at(command, 0)}'\r\n"
     end
   end
@@ -1155,6 +1169,13 @@ defmodule Server do
         Server.Store.update(key, "1")
         ":1\r\n"
     end
+  end
+
+  defp execute_lrange_command([key, start_str, stop_str], _client) do
+    start_index = String.to_integer(start_str)
+    stop_index = String.to_integer(stop_str)
+    elements = Server.ListStore.lrange(key, start_index, stop_index)
+    Server.Protocol.pack(elements) |> IO.iodata_to_binary()
   end
 
   defp write_line(line, client) do
