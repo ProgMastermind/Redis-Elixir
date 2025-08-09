@@ -871,6 +871,29 @@ defmodule Server do
     end
   end
 
+  defp execute_command("LPOP", [key, count_str], client) do
+    if Server.ClientState.in_transaction?(client) do
+      Server.ClientState.add_command(client, ["LPOP", key, count_str])
+      write_line("+QUEUED\r\n", client)
+    else
+      case Integer.parse(count_str) do
+        {count, ""} when count > 0 ->
+          case Server.ListStore.lpop_many(key, count) do
+            {:ok, values} ->
+              response = Server.Protocol.pack(values) |> IO.iodata_to_binary()
+              write_line(response, client)
+
+            :empty ->
+              write_line("*-1\r\n", client)
+          end
+
+        _ ->
+          # For invalid or non-positive counts, return null array per simplicity
+          write_line("*-1\r\n", client)
+      end
+    end
+  end
+
   defp execute_command("LLEN", [key], client) do
     if Server.ClientState.in_transaction?(client) do
       Server.ClientState.add_command(client, ["LLEN", key])
@@ -1221,6 +1244,19 @@ defmodule Server do
     case Server.ListStore.lpop(key) do
       {:ok, value} -> Server.Protocol.pack(value) |> IO.iodata_to_binary()
       :empty -> "$-1\r\n"
+    end
+  end
+
+  defp execute_lpop_command([key, count_str], _client) do
+    case Integer.parse(count_str) do
+      {count, ""} when count > 0 ->
+        case Server.ListStore.lpop_many(key, count) do
+          {:ok, values} -> Server.Protocol.pack(values) |> IO.iodata_to_binary()
+          :empty -> "*-1\r\n"
+        end
+
+      _ ->
+        "*-1\r\n"
     end
   end
 

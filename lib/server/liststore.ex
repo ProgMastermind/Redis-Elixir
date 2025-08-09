@@ -121,6 +121,33 @@ defmodule Server.ListStore do
   end
 
   @doc """
+  Remove and return up to `count` elements from the left of the list at `key`.
+
+  Returns `{:ok, popped_list}` when at least one element is removed, or `:empty`
+  if the list is empty or does not exist.
+  """
+  def lpop_many(key, count) when is_integer(count) and count > 0 do
+    Agent.get_and_update(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        list when is_list(list) and length(list) > 0 ->
+          n = min(count, length(list))
+          popped = Enum.take(list, n)
+          rest = Enum.drop(list, n)
+          {{:ok, popped}, Map.put(state, key, rest)}
+
+        [] ->
+          {:empty, Map.put(state, key, [])}
+
+        nil ->
+          {:empty, state}
+
+        _other ->
+          {:empty, state}
+      end
+    end)
+  end
+
+  @doc """
   Return a sublist from start to stop (inclusive) using 0-based indices.
 
   Semantics (aligned with the user's LRANGE spec):
