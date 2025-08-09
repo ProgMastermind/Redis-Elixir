@@ -820,8 +820,14 @@ defmodule Server do
     write_line("+PONG\r\n", client)
   end
 
-  defp execute_command("RPUSH", [key, element], client) do
-    new_len = Server.ListStore.rpush(key, element)
+  defp execute_command("RPUSH", [key | elements], client) do
+    new_len =
+      case elements do
+        [] -> 0
+        [single] -> Server.ListStore.rpush(key, single)
+        many -> Server.ListStore.rpush_many(key, many)
+      end
+
     write_line(":#{new_len}\r\n", client)
   end
 

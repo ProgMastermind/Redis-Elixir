@@ -14,21 +14,29 @@ defmodule Server.ListStore do
   If the list does not exist, it is created. Returns the length of the list
   after the push, as per Redis RPUSH semantics.
   """
-  def rpush(key, element) do
+  def rpush(key, element), do: rpush_many(key, [element])
+
+  @doc """
+  Append multiple `elements` to the list at `key` in order.
+
+  If the list does not exist, it is created with the given elements. Returns
+  the length of the list after the push.
+  """
+  def rpush_many(key, elements) when is_list(elements) do
     Agent.get_and_update(__MODULE__, fn state ->
       case Map.get(state, key) do
         nil ->
-          new_list = [element]
-          {1, Map.put(state, key, new_list)}
+          new_list = elements
+          {length(new_list), Map.put(state, key, new_list)}
 
         list when is_list(list) ->
-          updated = list ++ [element]
+          updated = list ++ elements
           {length(updated), Map.put(state, key, updated)}
 
         _other ->
-          # For now, reset to a new list to satisfy current stage
-          new_list = [element]
-          {1, Map.put(state, key, new_list)}
+          # Wrong type; reset to list for this stage's scope
+          new_list = elements
+          {length(new_list), Map.put(state, key, new_list)}
       end
     end)
   end
