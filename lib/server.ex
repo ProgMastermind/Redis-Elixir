@@ -913,11 +913,13 @@ defmodule Server do
       {[], _} ->
         write_line("-ERR wrong number of arguments for 'blpop' command\r\n", client)
       {keys, [timeout_str]} ->
-        with {timeout_secs, ""} <- Integer.parse(to_string(timeout_str)),
-             true <- timeout_secs >= 0 do
-          handle_blpop(keys, timeout_secs, client)
-        else
-          _ -> write_line("-ERR invalid timeout\r\n", client)
+        timeout_str = to_string(timeout_str)
+        case Float.parse(timeout_str) do
+          {timeout_secs, ""} when timeout_secs >= 0.0 ->
+            timeout_ms = round(timeout_secs * 1000)
+            handle_blpop(keys, timeout_ms, client)
+          _ ->
+            write_line("-ERR invalid timeout\r\n", client)
         end
     end
   end
@@ -1287,7 +1289,7 @@ defmodule Server do
     :gen_tcp.send(client, line)
   end
 
-  defp handle_blpop(keys, timeout_secs, client) do
+  defp handle_blpop(keys, timeout_ms, client) do
     # Try immediate pop in key order
     case Enum.find_value(keys, fn key ->
            case Server.ListStore.lpop(key) do
@@ -1300,10 +1302,10 @@ defmodule Server do
         write_line(response, client)
 
       nil ->
-        if timeout_secs == 0 do
+        if timeout_ms == 0 do
           block_indefinitely(keys, client)
         else
-          block_with_timeout(keys, timeout_secs, client)
+          block_with_timeout(keys, timeout_ms, client)
         end
     end
   end
@@ -1319,7 +1321,7 @@ defmodule Server do
     end
   end
 
-  defp block_with_timeout(keys, timeout_secs, client) do
+  defp block_with_timeout(keys, timeout_ms, client) do
     ref = make_ref()
     Server.ListBlock.add_waiter(keys, self(), client, ref)
 
@@ -1328,7 +1330,7 @@ defmodule Server do
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
         write_line(response, client)
     after
-      timeout_secs * 1000 ->
+      timeout_ms ->
         # Remove waiter and return null bulk string
         Server.ListBlock.remove_waiter_by_ref(ref)
         write_line("$-1\r\n", client)
@@ -1337,14 +1339,12 @@ defmodule Server do
 
   defp maybe_unblock_waiter_for_push(key) do
     case Server.ListBlock.take_waiter(key) do
-      {:ok, %{ref: ref, client: client}} ->
-        # Pop from the same key to deliver the element to the waiter
+      {:ok, %{ref: ref, pid: waiter_pid}} ->
         case Server.ListStore.lpop(key) do
           {:ok, value} ->
-            send(self(), {:list_pushed, key, value, ref})
-            # Directly send to the waiting client's socket
-            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-            :gen_tcp.send(client, response)
+            # Clean up waiter entries for other keys and notify the waiter process
+            Server.ListBlock.remove_waiter_by_ref(ref)
+            send(waiter_pid, {:list_pushed, key, value, ref})
           :empty -> :ok
         end
       :empty -> :ok
