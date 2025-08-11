@@ -912,12 +912,12 @@ defmodule Server do
     case Enum.split(args, -1) do
       {[], _} ->
         write_line("-ERR wrong number of arguments for 'blpop' command\r\n", client)
+
       {keys, [timeout_str]} ->
-        timeout_str = to_string(timeout_str)
-        case Float.parse(timeout_str) do
-          {timeout_secs, ""} when timeout_secs >= 0.0 ->
-            timeout_ms = round(timeout_secs * 1000)
+        case parse_timeout_ms(to_string(timeout_str)) do
+          {:ok, timeout_ms} when timeout_ms >= 0 ->
             handle_blpop(keys, timeout_ms, client)
+
           _ ->
             write_line("-ERR invalid timeout\r\n", client)
         end
@@ -1313,41 +1313,95 @@ defmodule Server do
   defp block_indefinitely(keys, client) do
     ref = make_ref()
     Server.ListBlock.add_waiter(keys, self(), client, ref)
-
-    receive do
-      {:list_pushed, key, value, ^ref} ->
+    # Re-check immediately after registering to avoid race with RPUSH between
+    # pre-check and waiter registration, without disturbing FIFO ordering.
+    case Enum.find_value(keys, fn key ->
+           case Server.ListStore.lpop(key) do
+             {:ok, value} -> {key, value}
+             :empty -> nil
+           end
+         end) do
+      {key, value} ->
+        # We consumed an element; remove our waiter entry and respond now.
+        Server.ListBlock.remove_waiter_by_ref(ref)
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
         write_line(response, client)
+
+      nil ->
+        receive do
+          {:list_pushed, key, value, ^ref} ->
+            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+            write_line(response, client)
+        end
     end
   end
 
   defp block_with_timeout(keys, timeout_ms, client) do
     ref = make_ref()
     Server.ListBlock.add_waiter(keys, self(), client, ref)
-
-    receive do
-      {:list_pushed, key, value, ^ref} ->
+    # Re-check immediately after registering to avoid race with RPUSH between
+    # pre-check and waiter registration, without disturbing FIFO ordering.
+    case Enum.find_value(keys, fn key ->
+           case Server.ListStore.lpop(key) do
+             {:ok, value} -> {key, value}
+             :empty -> nil
+           end
+         end) do
+      {key, value} ->
+        Server.ListBlock.remove_waiter_by_ref(ref)
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
         write_line(response, client)
-    after
-      timeout_ms ->
-        # Remove waiter and return null bulk string
-        Server.ListBlock.remove_waiter_by_ref(ref)
-        write_line("$-1\r\n", client)
+
+      nil ->
+        receive do
+          {:list_pushed, key, value, ^ref} ->
+            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+            write_line(response, client)
+        after
+          timeout_ms ->
+            # Remove waiter and return null bulk string
+            Server.ListBlock.remove_waiter_by_ref(ref)
+            write_line("$-1\r\n", client)
+        end
+    end
+  end
+
+  defp parse_timeout_ms(timeout_str) do
+    # Accept both integer seconds and fractional seconds (e.g., "1", "0.1")
+    case Integer.parse(timeout_str) do
+      {secs, ""} when secs >= 0 ->
+        {:ok, secs * 1000}
+
+      _ ->
+        case Float.parse(timeout_str) do
+          {secs_float, ""} when secs_float >= 0 ->
+            # Convert seconds to milliseconds; truncate towards zero
+            {:ok, trunc(secs_float * 1000)}
+
+          _ ->
+            :error
+        end
     end
   end
 
   defp maybe_unblock_waiter_for_push(key) do
     case Server.ListBlock.take_waiter(key) do
-      {:ok, %{ref: ref, pid: waiter_pid}} ->
+      {:ok, %{ref: ref, pid: waiting_pid} = waiter} ->
+        # Pop from the same key to deliver the element to the waiter
         case Server.ListStore.lpop(key) do
           {:ok, value} ->
-            # Clean up waiter entries for other keys and notify the waiter process
+            # Clean up this waiter entry from all keys it registered under
             Server.ListBlock.remove_waiter_by_ref(ref)
-            send(waiter_pid, {:list_pushed, key, value, ref})
-          :empty -> :ok
+            # Notify the waiting BLPOP process so it can respond to its client
+            send(waiting_pid, {:list_pushed, key, value, ref})
+
+          :empty ->
+            # Nothing to deliver; put the waiter back
+            Server.ListBlock.readd_waiter(waiter)
         end
-      :empty -> :ok
+
+      :empty ->
+        :ok
     end
   end
 end

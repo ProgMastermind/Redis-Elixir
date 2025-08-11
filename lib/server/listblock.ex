@@ -16,10 +16,13 @@ defmodule Server.ListBlock do
   Add a waiter to all provided keys. Returns the reference used.
   """
   def add_waiter(keys, pid, client, ref) when is_list(keys) do
+    # Generate a globally monotonic order for FIFO across concurrent callers
+    order = :erlang.unique_integer([:monotonic, :positive])
+
     Agent.update(__MODULE__, fn state ->
       Enum.reduce(keys, state, fn key, acc ->
         waiters = Map.get(acc, key, [])
-        waiter = %{pid: pid, client: client, ref: ref, keys: keys}
+        waiter = %{pid: pid, client: client, ref: ref, keys: keys, order: order}
         Map.put(acc, key, waiters ++ [waiter])
       end)
     end)
@@ -33,11 +36,14 @@ defmodule Server.ListBlock do
   def take_waiter(key) do
     Agent.get_and_update(__MODULE__, fn state ->
       case Map.get(state, key, []) do
-        [waiter | rest] ->
-          {{:ok, waiter}, Map.put(state, key, rest)}
-
         [] ->
           {:empty, state}
+
+        waiters ->
+          # Choose the earliest waiter by monotonic order to preserve FIFO
+          earliest = Enum.min_by(waiters, & &1.order)
+          remaining = Enum.reject(waiters, fn w -> w.ref == earliest.ref end)
+          {{:ok, earliest}, Map.put(state, key, remaining)}
       end
     end)
   end
@@ -54,6 +60,20 @@ defmodule Server.ListBlock do
         end)
 
       {removed?, new_state}
+    end)
+  end
+
+  @doc """
+  Re-add a waiter (previously taken) back to all its keys.
+  Note: this appends the waiter, not restoring exact original position.
+  """
+  def readd_waiter(%{keys: keys, pid: pid, client: client, ref: ref, order: order}) do
+    Agent.update(__MODULE__, fn state ->
+      Enum.reduce(keys, state, fn key, acc ->
+        waiters = Map.get(acc, key, [])
+        waiter = %{pid: pid, client: client, ref: ref, keys: keys, order: order}
+        Map.put(acc, key, waiters ++ [waiter])
+      end)
     end)
   end
 end
