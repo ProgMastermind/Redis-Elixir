@@ -8,7 +8,12 @@ defmodule Server.ClientState do
   def start_transaction(client) do
     Agent.update(__MODULE__, fn state ->
       client_state =
-        Map.get(state, client, %{in_transaction: false, queued_commands: [], subscriptions: []})
+        Map.get(state, client, %{
+          in_transaction: false,
+          queued_commands: [],
+          subscriptions: [],
+          subscribed_mode: false
+        })
 
       Map.put(state, client, %{client_state | in_transaction: true})
     end)
@@ -59,7 +64,12 @@ defmodule Server.ClientState do
   def subscribe(client, channel) do
     Agent.get_and_update(__MODULE__, fn state ->
       client_state =
-        Map.get(state, client, %{in_transaction: false, queued_commands: [], subscriptions: []})
+        Map.get(state, client, %{
+          in_transaction: false,
+          queued_commands: [],
+          subscriptions: [],
+          subscribed_mode: false
+        })
 
       current_subscriptions = Map.get(client_state, :subscriptions, [])
 
@@ -67,11 +77,26 @@ defmodule Server.ClientState do
         # Already subscribed, return current count
         {length(current_subscriptions), state}
       else
-        # Add new subscription
+        # Add new subscription and enter subscribed mode
         new_subscriptions = [channel | current_subscriptions]
-        updated_client_state = %{client_state | subscriptions: new_subscriptions}
+
+        updated_client_state = %{
+          client_state
+          | subscriptions: new_subscriptions,
+            subscribed_mode: true
+        }
+
         new_state = Map.put(state, client, updated_client_state)
         {length(new_subscriptions), new_state}
+      end
+    end)
+  end
+
+  def in_subscribed_mode?(client) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state, client) do
+        nil -> false
+        client_state -> Map.get(client_state, :subscribed_mode, false)
       end
     end)
   end

@@ -389,17 +389,14 @@ defmodule Server do
 
   defp serve(client, config) do
     try do
-      Logger.debug("SERVE: Reading command from client #{inspect(client)}")
-      command = read_line(client)
-      Logger.debug("SERVE: Received command, processing...")
-      process_command(command, client, config)
-      Logger.debug("SERVE: Command processed, continuing serve loop")
+      client
+      |> read_line()
+      |> process_command(client, config)
 
       serve(client, config)
     catch
       kind, reason ->
         Logger.error("Client process error: #{inspect(kind)}, #{inspect(reason)}")
-        Logger.error("Stacktrace: #{inspect(__STACKTRACE__)}")
         :gen_tcp.close(client)
         {:error, {kind, reason, __STACKTRACE__}}
     end
@@ -487,13 +484,27 @@ defmodule Server do
   # handling of commands
 
   defp execute_command_with_config(command, args, client, config) do
-    case command do
-      "INFO" when args == ["replication"] ->
-        handle_info_replication(client, config)
+    # Check if client is in subscribed mode and command is restricted
+    if Server.ClientState.in_subscribed_mode?(client) and
+         not command_allowed_in_subscribed_mode?(command) do
+      error_msg =
+        "ERR Can't execute '#{String.downcase(command)}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
 
-      _ ->
-        execute_command(command, args, client)
+      write_line("-#{error_msg}\r\n", client)
+    else
+      case command do
+        "INFO" when args == ["replication"] ->
+          handle_info_replication(client, config)
+
+        _ ->
+          execute_command(command, args, client)
+      end
     end
+  end
+
+  # Check if a command is allowed when client is in subscribed mode
+  defp command_allowed_in_subscribed_mode?(command) do
+    command in ["SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE", "PING", "QUIT"]
   end
 
   defp handle_info_replication(client, config) do
@@ -839,33 +850,12 @@ defmodule Server do
   end
 
   defp execute_command("RPUSH", [key | elements], client) do
-    {:ok, {client_ip, client_port}} = :inet.peername(client)
-    client_id = "#{:inet.ntoa(client_ip)}:#{client_port}"
-
-    Logger.debug(
-      "RPUSH: Client #{client_id} (#{inspect(client)}) pushing #{inspect(elements)} to key #{key}"
-    )
-
     new_len =
       case elements do
-        [] ->
-          Logger.debug("RPUSH: No elements to push")
-          0
-
-        [single] ->
-          result = Server.ListStore.rpush(key, single)
-          Logger.debug("RPUSH: Pushed single element #{single}, new length: #{result}")
-          result
-
-        many ->
-          result = Server.ListStore.rpush_many(key, many)
-          Logger.debug("RPUSH: Pushed multiple elements #{inspect(many)}, new length: #{result}")
-          result
+        [] -> 0
+        [single] -> Server.ListStore.rpush(key, single)
+        many -> Server.ListStore.rpush_many(key, many)
       end
-
-    # Debug: Check list state after RPUSH
-    current_list = Server.ListStore.get(key)
-    Logger.debug("RPUSH: After push, list for key #{key}: #{inspect(current_list)}")
 
     maybe_unblock_waiter_for_push(key)
     write_line(":#{new_len}\r\n", client)
@@ -1324,56 +1314,21 @@ defmodule Server do
   end
 
   defp write_line(line, client) do
-    Logger.debug("WRITE: Sending to client #{inspect(client)}: #{inspect(line)}")
-    result = :gen_tcp.send(client, line)
-    Logger.debug("WRITE: Send result: #{inspect(result)}")
-    result
+    :gen_tcp.send(client, line)
   end
 
   defp handle_blpop(keys, timeout_ms, client) do
-    {:ok, {client_ip, client_port}} = :inet.peername(client)
-    client_id = "#{:inet.ntoa(client_ip)}:#{client_port}"
-
-    Logger.debug(
-      "BLPOP: Client #{client_id} (#{inspect(client)}) checking for immediate values in keys #{inspect(keys)}"
-    )
-
-    # Debug: Check list states before popping
-    Enum.each(keys, fn key ->
-      current_list = Server.ListStore.get(key)
-      Logger.debug("BLPOP: Current list for key #{key}: #{inspect(current_list)}")
-    end)
-
     # Atomically register as waiter and check if we're first to avoid race conditions
     case Server.ListBlock.register_and_check_first(keys, self(), client) do
       {:first, ref} ->
-        Logger.debug(
-          "BLPOP: Client #{client_id} registered as FIRST waiter with ref #{inspect(ref)}"
-        )
-
         # We're first, try to pop immediately
-        case try_pop_as_first_waiter(keys, ref, client_id) do
+        case try_pop_as_first_waiter(keys, ref) do
           {key, value} ->
-            Logger.debug(
-              "BLPOP: Client #{client_id} got value #{value} from key #{key} as first waiter"
-            )
-
             Server.ListBlock.remove_waiter_by_ref(ref)
             response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-            Logger.debug("BLPOP: Client #{client_id} formatted response: #{inspect(response)}")
-            result = write_line(response, client)
-
-            Logger.debug(
-              "BLPOP: Client #{client_id} response sent, write result: #{inspect(result)}"
-            )
-
-            Logger.debug("BLPOP: Client #{client_id} immediate response complete")
+            write_line(response, client)
 
           nil ->
-            Logger.debug(
-              "BLPOP: Client #{client_id} is first waiter but keys are empty, proceeding to block"
-            )
-
             if timeout_ms == 0 do
               block_indefinitely_registered(keys, client, ref)
             else
@@ -1382,12 +1337,6 @@ defmodule Server do
         end
 
       {:not_first, ref} ->
-        Logger.debug(
-          "BLPOP: Client #{client_id} registered as NON-FIRST waiter with ref #{inspect(ref)}"
-        )
-
-        Logger.debug("BLPOP: Client #{client_id} not first in queue, proceeding to block")
-
         if timeout_ms == 0 do
           block_indefinitely_registered(keys, client, ref)
         else
@@ -1397,55 +1346,37 @@ defmodule Server do
   end
 
   # Try to pop a value when we know we're the first waiter
-  defp try_pop_as_first_waiter(keys, _ref, client_id) do
+  defp try_pop_as_first_waiter(keys, _ref) do
     Enum.find_value(keys, fn key ->
-      Logger.debug("BLPOP: Client #{client_id} trying to pop from key #{key} as first waiter")
-
       case Server.ListStore.lpop(key) do
-        {:ok, value} ->
-          Logger.debug("BLPOP: Client #{client_id} successfully popped #{value} from key #{key}")
-          {key, value}
-
-        :empty ->
-          Logger.debug("BLPOP: Client #{client_id} - key #{key} is empty")
-          nil
+        {:ok, value} -> {key, value}
+        :empty -> nil
       end
     end)
   end
 
   # Try to pop a value only if we're next in FIFO order for any of the keys
-  defp try_pop_in_fifo_order(keys, ref, client_id) do
+  defp try_pop_in_fifo_order(keys, ref) do
     Enum.find_value(keys, fn key ->
-      Logger.debug("BLPOP: Client #{client_id} checking if next in line for key #{key}")
-
       case Server.ListBlock.peek_first_waiter(key) do
         {:ok, %{ref: ^ref}} ->
           # We're next in line for this key, try to pop
-          Logger.debug("BLPOP: Client #{client_id} is next in line for key #{key}")
-
           case Server.ListStore.lpop(key) do
             {:ok, value} ->
-              Logger.debug(
-                "BLPOP: Client #{client_id} successfully popped #{value} from key #{key}"
-              )
-
               # Now we can remove ourselves since we got the value
               Server.ListBlock.take_waiter(key)
               {key, value}
 
             :empty ->
-              Logger.debug("BLPOP: Client #{client_id} - key #{key} is empty, staying in queue")
               nil
           end
 
         {:ok, _other_waiter} ->
           # Someone else is first
-          Logger.debug("BLPOP: Client #{client_id} not next in line for key #{key}")
           nil
 
         :empty ->
           # No waiters (shouldn't happen since we just added ourselves)
-          Logger.debug("BLPOP: Client #{client_id} - no waiters found for key #{key}")
           nil
       end
     end)
@@ -1453,21 +1384,16 @@ defmodule Server do
 
   # Modified blocking functions that work with pre-registered waiters
   defp block_indefinitely_registered(keys, client, ref) do
-    Logger.debug("BLPOP: Starting indefinite block with pre-registered ref #{inspect(ref)}")
     # Re-check immediately after registering to avoid race with RPUSH
-    case try_pop_in_fifo_order(keys, ref, "re-check") do
+    case try_pop_in_fifo_order(keys, ref) do
       {key, value} ->
-        Logger.debug("BLPOP: Got value #{value} from key #{key} on re-check")
         Server.ListBlock.remove_waiter_by_ref(ref)
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
         write_line(response, client)
 
       nil ->
-        Logger.debug("BLPOP: No immediate value on re-check, waiting for notification...")
-
         receive do
           {:list_pushed, key, value, ^ref} ->
-            Logger.debug("BLPOP: Received notification for key #{key}: #{value}")
             response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
             write_line(response, client)
         end
@@ -1475,83 +1401,8 @@ defmodule Server do
   end
 
   defp block_with_timeout_registered(keys, timeout_ms, client, ref) do
-    Logger.debug("BLPOP: Starting timeout block with pre-registered ref #{inspect(ref)}")
     # Re-check immediately after registering to avoid race with RPUSH
-    case try_pop_in_fifo_order(keys, ref, "re-check") do
-      {key, value} ->
-        Logger.debug("BLPOP: Got value #{value} from key #{key} on re-check")
-        Server.ListBlock.remove_waiter_by_ref(ref)
-        response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-        write_line(response, client)
-
-      nil ->
-        Logger.debug("BLPOP: No immediate value on re-check, waiting for notification...")
-
-        receive do
-          {:list_pushed, key, value, ^ref} ->
-            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-            write_line(response, client)
-        after
-          timeout_ms ->
-            Server.ListBlock.remove_waiter_by_ref(ref)
-            write_line("$-1\r\n", client)
-        end
-    end
-  end
-
-  defp block_indefinitely(keys, client) do
-    ref = make_ref()
-
-    Logger.debug(
-      "BLPOP: Starting indefinite block for keys #{inspect(keys)}, ref: #{inspect(ref)}"
-    )
-
-    try do
-      Server.ListBlock.add_waiter(keys, self(), client, ref)
-      # Re-check immediately after registering to avoid race with RPUSH between
-      # pre-check and waiter registration, without disturbing FIFO ordering.
-      case Enum.find_value(keys, fn key ->
-             case Server.ListStore.lpop(key) do
-               {:ok, value} -> {key, value}
-               :empty -> nil
-             end
-           end) do
-        {key, value} ->
-          # We consumed an element; remove our waiter entry and respond now.
-          Logger.debug("BLPOP: Immediate value found for key #{key}: #{value}")
-          Server.ListBlock.remove_waiter_by_ref(ref)
-          response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-          write_line(response, client)
-
-        nil ->
-          Logger.debug("BLPOP: No immediate value, waiting for notification...")
-
-          receive do
-            {:list_pushed, key, value, ^ref} ->
-              Logger.debug("BLPOP: Received notification for key #{key}: #{value}")
-              response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-              write_line(response, client)
-          end
-      end
-    catch
-      error ->
-        Logger.error("BLPOP error: #{inspect(error)}")
-        Server.ListBlock.remove_waiter_by_ref(ref)
-        write_line("-ERR Internal server error\r\n", client)
-    end
-  end
-
-  defp block_with_timeout(keys, timeout_ms, client) do
-    ref = make_ref()
-    Server.ListBlock.add_waiter(keys, self(), client, ref)
-    # Re-check immediately after registering to avoid race with RPUSH between
-    # pre-check and waiter registration, without disturbing FIFO ordering.
-    case Enum.find_value(keys, fn key ->
-           case Server.ListStore.lpop(key) do
-             {:ok, value} -> {key, value}
-             :empty -> nil
-           end
-         end) do
+    case try_pop_in_fifo_order(keys, ref) do
       {key, value} ->
         Server.ListBlock.remove_waiter_by_ref(ref)
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
@@ -1564,7 +1415,6 @@ defmodule Server do
             write_line(response, client)
         after
           timeout_ms ->
-            # Remove waiter and return null bulk string
             Server.ListBlock.remove_waiter_by_ref(ref)
             write_line("$-1\r\n", client)
         end
@@ -1590,29 +1440,22 @@ defmodule Server do
   end
 
   defp maybe_unblock_waiter_for_push(key) do
-    Logger.debug("RPUSH: Checking for waiters on key #{key}")
-
     case Server.ListBlock.take_waiter(key) do
       {:ok, %{ref: ref, pid: waiting_pid} = waiter} ->
-        Logger.debug("RPUSH: Found waiter with ref #{inspect(ref)}, pid #{inspect(waiting_pid)}")
         # Pop from the same key to deliver the element to the waiter
         case Server.ListStore.lpop(key) do
           {:ok, value} ->
-            Logger.debug("RPUSH: Popped value #{value} for waiter, sending notification")
             # Clean up this waiter entry from all keys it registered under
             Server.ListBlock.remove_waiter_by_ref(ref)
             # Notify the waiting BLPOP process so it can respond to its client
             send(waiting_pid, {:list_pushed, key, value, ref})
-            Logger.debug("RPUSH: Notification sent to #{inspect(waiting_pid)}")
 
           :empty ->
-            Logger.debug("RPUSH: No value to pop, putting waiter back")
             # Nothing to deliver; put the waiter back
             Server.ListBlock.readd_waiter(waiter)
         end
 
       :empty ->
-        Logger.debug("RPUSH: No waiters found for key #{key}")
         :ok
     end
   end
