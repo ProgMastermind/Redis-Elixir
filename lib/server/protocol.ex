@@ -49,10 +49,11 @@ defmodule Server.Protocol do
   end
 
   defp pack_list(items) do
-    packed_items = Enum.map(items, fn
-      item when is_list(item) -> pack_list(item)
-      item -> pack(item)
-    end)
+    packed_items =
+      Enum.map(items, fn
+        item when is_list(item) -> pack_list(item)
+        item -> pack(item)
+      end)
 
     [?*, Integer.to_string(length(items)), @crlf_iodata | packed_items]
   end

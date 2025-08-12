@@ -31,6 +31,59 @@ defmodule Server.ListBlock do
   end
 
   @doc """
+  Peek at the first waiter for a given key without removing it. Returns {:ok, waiter} | :empty.
+  """
+  def peek_first_waiter(key) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state, key, []) do
+        [] ->
+          :empty
+
+        waiters ->
+          # Choose the earliest waiter by monotonic order to preserve FIFO
+          earliest = Enum.min_by(waiters, & &1.order)
+          {:ok, earliest}
+      end
+    end)
+  end
+
+  @doc """
+  Atomically register as waiter and check if we're first. Returns {:first, ref} | {:not_first, ref}.
+  """
+  def register_and_check_first(keys, pid, client) do
+    ref = make_ref()
+    order = :erlang.unique_integer([:monotonic, :positive])
+
+    Agent.get_and_update(__MODULE__, fn state ->
+      # First, add ourselves to all keys
+      new_state =
+        Enum.reduce(keys, state, fn key, acc ->
+          waiters = Map.get(acc, key, [])
+          waiter = %{pid: pid, client: client, ref: ref, keys: keys, order: order}
+          Map.put(acc, key, waiters ++ [waiter])
+        end)
+
+      # Then check if we're first for any key
+      is_first =
+        Enum.any?(keys, fn key ->
+          waiters = Map.get(new_state, key, [])
+
+          case waiters do
+            [] ->
+              false
+
+            _ ->
+              earliest = Enum.min_by(waiters, & &1.order)
+              earliest.ref == ref
+          end
+        end)
+
+      result = if is_first, do: {:first, ref}, else: {:not_first, ref}
+      {result, new_state}
+    end)
+  end
+
+  @doc """
   Take the oldest waiter for a given key. Returns {:ok, waiter} | :empty.
   """
   def take_waiter(key) do
@@ -56,7 +109,7 @@ defmodule Server.ListBlock do
       {removed?, new_state} =
         Enum.reduce(state, {false, %{}}, fn {key, waiters}, {flag, acc} ->
           {kept, removed} = Enum.split_with(waiters, fn w -> w.ref != ref end)
-          {flag or (removed != []), Map.put(acc, key, kept)}
+          {flag or removed != [], Map.put(acc, key, kept)}
         end)
 
       {removed?, new_state}
