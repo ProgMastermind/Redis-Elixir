@@ -1318,106 +1318,47 @@ defmodule Server do
   end
 
   defp handle_blpop(keys, timeout_ms, client) do
-    # Atomically register as waiter and check if we're first to avoid race conditions
-    case Server.ListBlock.register_and_check_first(keys, self(), client) do
-      {:first, ref} ->
-        # We're first, try to pop immediately
-        case try_pop_as_first_waiter(keys, ref) do
-          {key, value} ->
-            Server.ListBlock.remove_waiter_by_ref(ref)
-            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-            write_line(response, client)
+    case Server.ListBlock.pop_or_register_waiter(keys, self(), client) do
+      {:ok, {key, value}} ->
+        # We got a value immediately, no waiting needed.
+        response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+        write_line(response, client)
 
-          nil ->
-            if timeout_ms == 0 do
-              block_indefinitely_registered(keys, client, ref)
-            else
-              block_with_timeout_registered(keys, timeout_ms, client, ref)
-            end
-        end
-
-      {:not_first, ref} ->
+      {:wait, ref} ->
+        # No value was available, we were registered as a waiter. Now we block.
         if timeout_ms == 0 do
-          block_indefinitely_registered(keys, client, ref)
+          block_indefinitely(ref, client)
         else
-          block_with_timeout_registered(keys, timeout_ms, client, ref)
+          block_with_timeout(ref, timeout_ms, client)
         end
     end
   end
 
-  # Try to pop a value when we know we're the first waiter
-  defp try_pop_as_first_waiter(keys, _ref) do
-    Enum.find_value(keys, fn key ->
-      case Server.ListStore.lpop(key) do
-        {:ok, value} -> {key, value}
-        :empty -> nil
-      end
-    end)
-  end
-
-  # Try to pop a value only if we're next in FIFO order for any of the keys
-  defp try_pop_in_fifo_order(keys, ref) do
-    Enum.find_value(keys, fn key ->
-      case Server.ListBlock.peek_first_waiter(key) do
-        {:ok, %{ref: ^ref}} ->
-          # We're next in line for this key, try to pop
-          case Server.ListStore.lpop(key) do
-            {:ok, value} ->
-              # Now we can remove ourselves since we got the value
-              Server.ListBlock.take_waiter(key)
-              {key, value}
-
-            :empty ->
-              nil
-          end
-
-        {:ok, _other_waiter} ->
-          # Someone else is first
-          nil
-
-        :empty ->
-          # No waiters (shouldn't happen since we just added ourselves)
-          nil
-      end
-    end)
-  end
-
-  # Modified blocking functions that work with pre-registered waiters
-  defp block_indefinitely_registered(keys, client, ref) do
-    # Re-check immediately after registering to avoid race with RPUSH
-    case try_pop_in_fifo_order(keys, ref) do
-      {key, value} ->
-        Server.ListBlock.remove_waiter_by_ref(ref)
+  # Simplified blocking function (the timeout version is similar)
+  defp block_indefinitely(ref, client) do
+    receive do
+      {:list_pushed, key, value, ^ref} ->
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
         write_line(response, client)
-
-      nil ->
-        receive do
-          {:list_pushed, key, value, ^ref} ->
-            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-            write_line(response, client)
-        end
     end
   end
 
-  defp block_with_timeout_registered(keys, timeout_ms, client, ref) do
-    # Re-check immediately after registering to avoid race with RPUSH
-    case try_pop_in_fifo_order(keys, ref) do
-      {key, value} ->
-        Server.ListBlock.remove_waiter_by_ref(ref)
+  defp block_with_timeout(ref, timeout_ms, client) do
+    receive do
+      # This pattern matches the success message sent by the RPUSH process.
+      # The pin operator (^) ensures we only accept the message for our specific request.
+      {:list_pushed, key, value, ^ref} ->
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
         write_line(response, client)
+    after
+      # This block executes if no matching message is received within the timeout period.
+      timeout_ms ->
+        # CRITICAL: If we time out, we must remove our waiter entry from the
+        # ListBlock agent to prevent memory leaks and dangling waiters.
+        Server.ListBlock.remove_waiter_by_ref(ref)
 
-      nil ->
-        receive do
-          {:list_pushed, key, value, ^ref} ->
-            response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
-            write_line(response, client)
-        after
-          timeout_ms ->
-            Server.ListBlock.remove_waiter_by_ref(ref)
-            write_line("$-1\r\n", client)
-        end
+        # Send the standard Redis "null" response for a BLPOP timeout.
+        write_line("$-1\r\n", client)
     end
   end
 

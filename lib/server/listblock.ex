@@ -129,4 +129,42 @@ defmodule Server.ListBlock do
       end)
     end)
   end
+
+  # In Server.ListBlock
+
+  @doc """
+  Atomically tries to LPOP a value from any of the keys.
+  If successful, returns {:ok, {key, value}}.
+  If all lists are empty, registers a waiter and returns {:wait, ref}.
+  """
+  def pop_or_register_waiter(keys, pid, client) do
+    ref = make_ref()
+    order = :erlang.unique_integer([:monotonic, :positive])
+
+    Agent.get_and_update(__MODULE__, fn state ->
+      # First, try to pop a value from the actual data store
+      pop_result =
+        Enum.find_value(keys, fn key ->
+          case Server.ListStore.lpop(key) do
+            {:ok, value} -> {key, value}
+            :empty -> nil
+          end
+        end)
+
+      if pop_result do
+        # We found a value! Return it and don't change the waiter state.
+        {{:ok, pop_result}, state}
+      else
+        # No value found. Add ourselves as a waiter to all keys.
+        new_state =
+          Enum.reduce(keys, state, fn key, acc ->
+            waiters = Map.get(acc, key, [])
+            waiter = %{pid: pid, client: client, ref: ref, keys: keys, order: order}
+            Map.put(acc, key, waiters ++ [waiter])
+          end)
+
+        {{:wait, ref}, new_state}
+      end
+    end)
+  end
 end
