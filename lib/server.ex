@@ -387,24 +387,55 @@ defmodule Server do
     end
   end
 
-  defp serve(client, config) do
-    try do
-      client
-      |> read_line()
-      |> process_command(client, config)
+  # defp serve(client, config) do
+  #   try do
+  #     client
+  #     |> read_line()
+  #     |> process_command(client, config)
 
-      serve(client, config)
-    catch
-      kind, reason ->
-        Logger.error("Client process error: #{inspect(kind)}, #{inspect(reason)}")
-        :gen_tcp.close(client)
-        {:error, {kind, reason, __STACKTRACE__}}
+  #     serve(client, config)
+  #   catch
+  #     kind, reason ->
+  #       Logger.error("Client process error: #{inspect(kind)}, #{inspect(reason)}")
+  #       :gen_tcp.close(client)
+  #       {:error, {kind, reason, __STACKTRACE__}}
+  #   end
+  # end
+
+  # defp read_line(client) do
+  #   case :gen_tcp.recv(client, 0) do
+  #     {:ok, data} -> data
+  #     {:error, reason} -> {:error, reason}
+  #   end
+  # end
+
+  # In server.ex
+
+  defp serve(client, config) do
+    case read_line(client) do
+      # Success case: We received data from the client
+      {:ok, data} ->
+        process_command(data, client, config)
+        # Loop to serve the next command from this client
+        serve(client, config)
+
+      # Disconnect case: The client closed the connection
+      {:error, :closed} ->
+        Logger.info("Client disconnected.")
+
+      # Do nothing, simply let this process exit gracefully.
+
+      # Other error case
+      {:error, reason} ->
+        Logger.error("TCP error: #{inspect(reason)}")
+        # Do nothing, simply let this process exit gracefully.
     end
   end
 
   defp read_line(client) do
-    case :gen_tcp.recv(client, 0) do
-      {:ok, data} -> data
+    # Set a longer timeout to handle blocking commands correctly
+    case :gen_tcp.recv(client, 0, :infinity) do
+      {:ok, data} -> {:ok, data}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -849,19 +880,27 @@ defmodule Server do
     write_line(response, client)
   end
 
-  defp execute_command("RPUSH", [key | elements], client) do
-    new_len =
-      case elements do
-        [] -> 0
-        [single] -> Server.ListStore.rpush(key, single)
-        many -> Server.ListStore.rpush_many(key, many)
-      end
+  # defp execute_command("RPUSH", [key | elements], client) do
+  #   new_len =
+  #     case elements do
+  #       [] -> 0
+  #       [single] -> Server.ListStore.rpush(key, single)
+  #       many -> Server.ListStore.rpush_many(key, many)
+  #     end
 
-    maybe_unblock_waiter_for_push(key)
+  #   maybe_unblock_waiter_for_push(key)
+  #   write_line(":#{new_len}\r\n", client)
+  # end
+
+  defp execute_command("RPUSH", [key | elements], client) do
+    # RPUSH now asks the ListBlock to handle everything.
+    new_len = Server.ListBlock.unblock_or_push(key, elements)
     write_line(":#{new_len}\r\n", client)
   end
 
   defp execute_command("LPUSH", [key | elements], client) do
+    # For LPUSH, we still use the traditional approach since it pushes to the front
+    # and we need to maintain the blocking semantics properly
     new_len =
       case elements do
         [] -> 0
@@ -1319,13 +1358,17 @@ defmodule Server do
 
   defp handle_blpop(keys, timeout_ms, client) do
     case Server.ListBlock.pop_or_register_waiter(keys, self(), client) do
+      # This is the code path your log says is being taken
       {:ok, {key, value}} ->
-        # We got a value immediately, no waiting needed.
         response = Server.Protocol.pack([key, value]) |> IO.iodata_to_binary()
+
+        # ADD THIS LINE
+        IO.inspect({:sending_to_client, client, response}, label: "FINAL STEP")
+
         write_line(response, client)
 
       {:wait, ref} ->
-        # No value was available, we were registered as a waiter. Now we block.
+        # This path is not even being used by Client 2 in your test scenario
         if timeout_ms == 0 do
           block_indefinitely(ref, client)
         else
@@ -1362,6 +1405,12 @@ defmodule Server do
     end
   end
 
+  defp maybe_unblock_waiter_for_push(key) do
+    # For LPUSH, check if there are waiters and deliver to them
+    # Don't pop from the list - just trigger the pending delivery check
+    spawn(fn -> Server.ListBlock.check_pending_for_key(key) end)
+  end
+
   defp parse_timeout_ms(timeout_str) do
     # Accept both integer seconds and fractional seconds (e.g., "1", "0.1")
     case Integer.parse(timeout_str) do
@@ -1377,27 +1426,6 @@ defmodule Server do
           _ ->
             :error
         end
-    end
-  end
-
-  defp maybe_unblock_waiter_for_push(key) do
-    case Server.ListBlock.take_waiter(key) do
-      {:ok, %{ref: ref, pid: waiting_pid} = waiter} ->
-        # Pop from the same key to deliver the element to the waiter
-        case Server.ListStore.lpop(key) do
-          {:ok, value} ->
-            # Clean up this waiter entry from all keys it registered under
-            Server.ListBlock.remove_waiter_by_ref(ref)
-            # Notify the waiting BLPOP process so it can respond to its client
-            send(waiting_pid, {:list_pushed, key, value, ref})
-
-          :empty ->
-            # Nothing to deliver; put the waiter back
-            Server.ListBlock.readd_waiter(waiter)
-        end
-
-      :empty ->
-        :ok
     end
   end
 end
