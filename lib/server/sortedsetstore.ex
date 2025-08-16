@@ -130,6 +130,75 @@ defmodule Server.SortedSetStore do
     end)
   end
 
+  @doc """
+  Gets a range of members from a sorted set by their rank (index).
+
+  Returns a list of members in the specified range. Supports negative indexes
+  where -1 is the last element, -2 is the second to last, etc.
+
+  ## Parameters
+  - key: The sorted set key
+  - start_index: Starting index (inclusive), can be negative
+  - stop_index: Ending index (inclusive), can be negative
+
+  ## Returns
+  - List of members in the range if key exists
+  - Empty list if key doesn't exist or range is invalid
+
+  ## Examples
+      ZRANGE key 0 2   # First 3 elements
+      ZRANGE key -3 -1 # Last 3 elements
+      ZRANGE key 1 -2  # From second element to second-to-last
+  """
+  def zrange(key, start_index, stop_index) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        nil ->
+          []
+
+        %{sorted_list: sorted_list} ->
+          list_length = length(sorted_list)
+
+          # Handle empty sorted set
+          if list_length == 0 do
+            []
+          else
+            # Normalize negative indexes
+            normalized_start = normalize_index(start_index, list_length)
+            normalized_stop = normalize_index(stop_index, list_length)
+
+            # Validate range
+            cond do
+              normalized_start >= list_length ->
+                []
+
+              normalized_start > normalized_stop ->
+                []
+
+              true ->
+                # Adjust stop index if it exceeds list bounds
+                actual_stop = min(normalized_stop, list_length - 1)
+
+                # Extract the range and return only member names
+                sorted_list
+                |> Enum.slice(normalized_start..actual_stop)
+                |> Enum.map(fn {member, _score} -> member end)
+            end
+          end
+      end
+    end)
+  end
+
+  # Private helper to normalize negative indexes
+  # Redis uses -1 for last element, -2 for second to last, etc.
+  defp normalize_index(index, list_length) when index < 0 do
+    max(0, list_length + index)
+  end
+
+  defp normalize_index(index, _list_length) when index >= 0 do
+    index
+  end
+
   # Private helper to find the index of a member in the sorted list
   defp find_member_index([], _member, _index) do
     # Member not found (shouldn't happen if called correctly)

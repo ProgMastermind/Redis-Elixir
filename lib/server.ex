@@ -1063,6 +1063,20 @@ defmodule Server do
     end
   end
 
+  defp execute_command("ZRANGE", [key, start_str, stop_str], client) do
+    case {Integer.parse(start_str), Integer.parse(stop_str)} do
+      {{start_index, ""}, {stop_index, ""}} ->
+        # Successfully parsed both indexes
+        members = Server.SortedSetStore.zrange(key, start_index, stop_index)
+        response = Server.Protocol.pack(members) |> IO.iodata_to_binary()
+        write_line(response, client)
+
+      _ ->
+        # Invalid index format
+        write_line("-ERR value is not an integer or out of range\r\n", client)
+    end
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
