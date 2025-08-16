@@ -423,12 +423,16 @@ defmodule Server do
       # Disconnect case: The client closed the connection
       {:error, :closed} ->
         Logger.info("Client disconnected.")
+        # Clean up subscriptions for this client
+        Server.PubSub.remove_client(client)
 
       # Do nothing, simply let this process exit gracefully.
 
       # Other error case
       {:error, reason} ->
         Logger.error("TCP error: #{inspect(reason)}")
+        # Clean up subscriptions for this client
+        Server.PubSub.remove_client(client)
         # Do nothing, simply let this process exit gracefully.
     end
   end

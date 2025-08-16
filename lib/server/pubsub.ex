@@ -191,20 +191,48 @@ defmodule Server.PubSub do
 
   @doc """
   Publish a message to a channel.
-  Currently just returns the subscriber count, but designed to be easily
-  extended for actual message delivery in the next stage.
+  Delivers the message to all subscribed clients and returns the subscriber count.
   """
-  def publish(channel, _message) do
-    # For now, just return the subscriber count
-    # In the next stage, this will also deliver the message to all subscribers
-    subscriber_count = get_subscriber_count(channel)
+  def publish(channel, message) do
+    subscribers = get_subscribers(channel)
+    subscriber_count = length(subscribers)
 
-    # TODO: In next stage, add message delivery here
-    # subscribers = get_subscribers(channel)
-    # Enum.each(subscribers, fn client ->
-    #   deliver_message(client, channel, message)
-    # end)
+    # Deliver message to all subscribers
+    Enum.each(subscribers, fn client ->
+      deliver_message(client, channel, message)
+    end)
 
     subscriber_count
+  end
+
+  # Deliver a message to a specific client.
+  # Sends a RESP array: ["message", channel, message_content]
+  defp deliver_message(client, channel, message) do
+    # Format the message as RESP array: ["message", channel, message_content]
+    # *3\r\n$7\r\nmessage\r\n$<channel_len>\r\n<channel>\r\n$<msg_len>\r\n<message>\r\n
+
+    # Build the RESP array manually for better control
+    message_bulk = format_bulk_string("message")
+    channel_bulk = format_bulk_string(channel)
+    content_bulk = format_bulk_string(message)
+
+    response = "*3\r\n#{message_bulk}#{channel_bulk}#{content_bulk}"
+
+    # Send the message to the client
+    case :gen_tcp.send(client, response) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        # Handle connection errors (client might have disconnected)
+        # Remove the client from subscriptions to prevent future errors
+        remove_client(client)
+        {:error, reason}
+    end
+  end
+
+  # Format a string as a RESP bulk string.
+  defp format_bulk_string(str) do
+    "$#{byte_size(str)}\r\n#{str}\r\n"
   end
 end
