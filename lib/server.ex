@@ -16,6 +16,7 @@ defmodule Server do
       Server.Clientbuffer,
       Server.ListBlock,
       Server.ListStore,
+      Server.SortedSetStore,
       Server.Bytes,
       Server.Acknowledge,
       Server.Pendingwrites,
@@ -1017,6 +1018,35 @@ defmodule Server do
 
           _ ->
             write_line("-ERR invalid timeout\r\n", client)
+        end
+    end
+  end
+
+  defp execute_command("ZADD", [key, score_str, member], client) do
+    case Float.parse(score_str) do
+      {score, ""} ->
+        # Successfully parsed as float
+        new_members_added = Server.SortedSetStore.zadd(key, score, member)
+        write_line(":#{new_members_added}\r\n", client)
+
+      {score, _remainder} ->
+        # Parsed as float but with remaining characters
+        new_members_added = Server.SortedSetStore.zadd(key, score, member)
+        write_line(":#{new_members_added}\r\n", client)
+
+      :error ->
+        # Try parsing as integer
+        case Integer.parse(score_str) do
+          {score, ""} ->
+            new_members_added = Server.SortedSetStore.zadd(key, score * 1.0, member)
+            write_line(":#{new_members_added}\r\n", client)
+
+          {score, _remainder} ->
+            new_members_added = Server.SortedSetStore.zadd(key, score * 1.0, member)
+            write_line(":#{new_members_added}\r\n", client)
+
+          :error ->
+            write_line("-ERR value is not a valid float\r\n", client)
         end
     end
   end
