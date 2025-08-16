@@ -1082,6 +1082,20 @@ defmodule Server do
     write_line(":#{cardinality}\r\n", client)
   end
 
+  defp execute_command("ZSCORE", [key, member], client) do
+    case Server.SortedSetStore.zscore(key, member) do
+      nil ->
+        # Member or key doesn't exist - return null bulk string
+        write_line("$-1\r\n", client)
+
+      score ->
+        # Member exists - return the score as a RESP bulk string
+        score_str = Float.to_string(score)
+        response = Server.Protocol.pack(score_str) |> IO.iodata_to_binary()
+        write_line(response, client)
+    end
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
