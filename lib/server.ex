@@ -1051,6 +1051,18 @@ defmodule Server do
     end
   end
 
+  defp execute_command("ZRANK", [key, member], client) do
+    case Server.SortedSetStore.zrank(key, member) do
+      nil ->
+        # Member or key doesn't exist - return null bulk string
+        write_line("$-1\r\n", client)
+
+      rank ->
+        # Member exists - return the rank as an integer
+        write_line(":#{rank}\r\n", client)
+    end
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end

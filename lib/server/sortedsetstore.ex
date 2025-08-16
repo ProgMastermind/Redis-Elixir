@@ -102,6 +102,50 @@ defmodule Server.SortedSetStore do
     end)
   end
 
+  @doc """
+  Gets the rank (0-based index) of a member in a sorted set.
+
+  Returns the rank as an integer if the member exists, or nil if either
+  the key or member doesn't exist.
+
+  Members are ordered by score (ascending), and for members with the same score,
+  they are ordered lexicographically.
+  """
+  def zrank(key, member) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        nil ->
+          nil
+
+        %{members: members, sorted_list: sorted_list} ->
+          case Map.get(members, member) do
+            nil ->
+              nil
+
+            _score ->
+              # Find the index of the member in the sorted list
+              find_member_index(sorted_list, member, 0)
+          end
+      end
+    end)
+  end
+
+  # Private helper to find the index of a member in the sorted list
+  defp find_member_index([], _member, _index) do
+    # Member not found (shouldn't happen if called correctly)
+    nil
+  end
+
+  defp find_member_index([{member, _score} | _rest], member, index) do
+    # Found the member at this index
+    index
+  end
+
+  defp find_member_index([{_other_member, _score} | rest], member, index) do
+    # Continue searching
+    find_member_index(rest, member, index + 1)
+  end
+
   # Private helper to insert an element in the correct position in a sorted list
   # Maintains order by score (ascending), then by member name (lexicographically)
   defp insert_sorted({member, score}, sorted_list) do
