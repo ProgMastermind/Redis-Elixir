@@ -17,7 +17,9 @@ defmodule Server.PubSub do
           # channel -> MapSet of clients
           channel_to_clients: %{},
           # client -> MapSet of channels
-          client_to_channels: %{}
+          client_to_channels: %{},
+          # client -> boolean (whether client is in subscribed mode)
+          subscribed_mode_clients: MapSet.new()
         }
       end,
       name: __MODULE__
@@ -30,23 +32,30 @@ defmodule Server.PubSub do
   """
   def subscribe(client, channel) do
     Agent.get_and_update(__MODULE__, fn state ->
-      %{channel_to_clients: c2c, client_to_channels: cl2ch} = state
+      %{channel_to_clients: c2c, client_to_channels: cl2ch, subscribed_mode_clients: smc} = state
 
       # Get current channels for client
       current_channels = Map.get(cl2ch, client, MapSet.new())
 
       if MapSet.member?(current_channels, channel) do
         # Already subscribed, return current count without changes
-        {MapSet.size(current_channels), state}
+        # But ensure client is marked as in subscribed mode
+        new_smc = MapSet.put(smc, client)
+        new_state = %{state | subscribed_mode_clients: new_smc}
+        {MapSet.size(current_channels), new_state}
       else
         # Add subscription
         new_client_channels = MapSet.put(current_channels, channel)
         current_channel_clients = Map.get(c2c, channel, MapSet.new())
         new_channel_clients = MapSet.put(current_channel_clients, client)
 
+        # Mark client as being in subscribed mode
+        new_smc = MapSet.put(smc, client)
+
         new_state = %{
           channel_to_clients: Map.put(c2c, channel, new_channel_clients),
-          client_to_channels: Map.put(cl2ch, client, new_client_channels)
+          client_to_channels: Map.put(cl2ch, client, new_client_channels),
+          subscribed_mode_clients: new_smc
         }
 
         {MapSet.size(new_client_channels), new_state}
@@ -60,7 +69,7 @@ defmodule Server.PubSub do
   """
   def unsubscribe(client, channel) do
     Agent.get_and_update(__MODULE__, fn state ->
-      %{channel_to_clients: c2c, client_to_channels: cl2ch} = state
+      %{channel_to_clients: c2c, client_to_channels: cl2ch, subscribed_mode_clients: smc} = state
 
       current_channels = Map.get(cl2ch, client, MapSet.new())
 
@@ -87,12 +96,14 @@ defmodule Server.PubSub do
 
         new_state = %{
           channel_to_clients: new_c2c,
-          client_to_channels: new_cl2ch
+          client_to_channels: new_cl2ch,
+          # Keep client in subscribed mode even with 0 subscriptions
+          subscribed_mode_clients: smc
         }
 
         {MapSet.size(new_client_channels), new_state}
       else
-        # Not subscribed to this channel
+        # Not subscribed to this channel, but still return current count
         {MapSet.size(current_channels), state}
       end
     end)
@@ -137,14 +148,13 @@ defmodule Server.PubSub do
   end
 
   @doc """
-  Check if a client is in subscribed mode (subscribed to at least one channel).
+  Check if a client is in subscribed mode.
+  Once a client enters subscribed mode (by subscribing to any channel),
+  they remain in subscribed mode until disconnection.
   """
   def in_subscribed_mode?(client) do
     Agent.get(__MODULE__, fn state ->
-      case Map.get(state.client_to_channels, client) do
-        nil -> false
-        channels -> MapSet.size(channels) > 0
-      end
+      MapSet.member?(state.subscribed_mode_clients, client)
     end)
   end
 
@@ -153,11 +163,12 @@ defmodule Server.PubSub do
   """
   def remove_client(client) do
     Agent.update(__MODULE__, fn state ->
-      %{channel_to_clients: c2c, client_to_channels: cl2ch} = state
+      %{channel_to_clients: c2c, client_to_channels: cl2ch, subscribed_mode_clients: smc} = state
 
       case Map.get(cl2ch, client) do
         nil ->
-          state
+          # Remove from subscribed mode clients even if no channels
+          %{state | subscribed_mode_clients: MapSet.delete(smc, client)}
 
         client_channels ->
           # Remove client from all channels they were subscribed to
@@ -178,12 +189,14 @@ defmodule Server.PubSub do
               end
             end)
 
-          # Remove client from client_to_channels mapping
+          # Remove client from all mappings
           new_cl2ch = Map.delete(cl2ch, client)
+          new_smc = MapSet.delete(smc, client)
 
           %{
             channel_to_clients: new_c2c,
-            client_to_channels: new_cl2ch
+            client_to_channels: new_cl2ch,
+            subscribed_mode_clients: new_smc
           }
       end
     end)

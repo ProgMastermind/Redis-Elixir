@@ -900,6 +900,20 @@ defmodule Server do
     write_line(response, client)
   end
 
+  defp execute_command("UNSUBSCRIBE", [channel], client) do
+    # Use the PubSub module for unsubscription management
+    remaining_count = Server.PubSub.unsubscribe(client, channel)
+
+    # Manually construct RESP array with proper types: ["unsubscribe", channel, count]
+    # where count must be a RESP integer, not bulk string
+    unsubscribe_bulk = Server.Protocol.pack("unsubscribe") |> IO.iodata_to_binary()
+    channel_bulk = Server.Protocol.pack(channel) |> IO.iodata_to_binary()
+    count_integer = ":#{remaining_count}\r\n"
+
+    response = "*3\r\n#{unsubscribe_bulk}#{channel_bulk}#{count_integer}"
+    write_line(response, client)
+  end
+
   defp execute_command("PUBLISH", [channel, message], client) do
     # Publish message to channel and get the number of subscribers
     subscriber_count = Server.PubSub.publish(channel, message)
