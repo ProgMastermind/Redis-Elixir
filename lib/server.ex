@@ -1077,6 +1077,11 @@ defmodule Server do
     end
   end
 
+  defp execute_command("ZCARD", [key], client) do
+    cardinality = Server.SortedSetStore.zcard(key)
+    write_line(":#{cardinality}\r\n", client)
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
