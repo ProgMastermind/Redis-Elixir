@@ -22,6 +22,7 @@ defmodule Server do
       Server.Config,
       Server.RdbStore,
       Server.ClientState,
+      Server.PubSub,
       Server.Streamstore,
       {Task, fn -> Server.listen(config) end}
     ]
@@ -516,7 +517,7 @@ defmodule Server do
 
   defp execute_command_with_config(command, args, client, config) do
     # Check if client is in subscribed mode and command is restricted
-    if Server.ClientState.in_subscribed_mode?(client) and
+    if Server.PubSub.in_subscribed_mode?(client) and
          not command_allowed_in_subscribed_mode?(command) do
       error_msg =
         "ERR Can't execute '#{String.downcase(command)}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
@@ -865,7 +866,7 @@ defmodule Server do
   end
 
   defp execute_command("PING", [], client) do
-    if Server.ClientState.in_subscribed_mode?(client) do
+    if Server.PubSub.in_subscribed_mode?(client) do
       # In subscribed mode, return RESP array ["pong", ""]
       # Manually construct RESP array: *2\r\n$4\r\npong\r\n$0\r\n\r\n
       pong_bulk = "$4\r\npong\r\n"
@@ -879,7 +880,12 @@ defmodule Server do
   end
 
   defp execute_command("SUBSCRIBE", [channel], client) do
-    subscription_count = Server.ClientState.subscribe(client, channel)
+    # Use the new PubSub module for subscription management
+    subscription_count = Server.PubSub.subscribe(client, channel)
+
+    # Also maintain the ClientState for transaction mode compatibility
+    Server.ClientState.subscribe(client, channel)
+
     # Manually construct RESP array with proper types: ["subscribe", channel, count]
     # where count must be a RESP integer, not bulk string
     subscribe_bulk = Server.Protocol.pack("subscribe") |> IO.iodata_to_binary()
@@ -888,6 +894,14 @@ defmodule Server do
 
     response = "*3\r\n#{subscribe_bulk}#{channel_bulk}#{count_integer}"
     write_line(response, client)
+  end
+
+  defp execute_command("PUBLISH", [channel, message], client) do
+    # Publish message to channel and get the number of subscribers
+    subscriber_count = Server.PubSub.publish(channel, message)
+
+    # Return the subscriber count as a RESP integer
+    write_line(":#{subscriber_count}\r\n", client)
   end
 
   defp execute_command("RPUSH", [key | elements], client) do

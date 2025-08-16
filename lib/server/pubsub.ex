@@ -1,0 +1,210 @@
+defmodule Server.PubSub do
+  @moduledoc """
+  Pub/Sub system for managing channel subscriptions and message publishing.
+
+  This module maintains bidirectional mappings:
+  - channel -> [clients] (for efficient PUBLISH)
+  - client -> [channels] (for subscription management)
+
+  Designed to be easily extensible for message delivery in future stages.
+  """
+  use Agent
+
+  def start_link(_) do
+    Agent.start_link(
+      fn ->
+        %{
+          # channel -> MapSet of clients
+          channel_to_clients: %{},
+          # client -> MapSet of channels
+          client_to_channels: %{}
+        }
+      end,
+      name: __MODULE__
+    )
+  end
+
+  @doc """
+  Subscribe a client to a channel.
+  Returns the total number of channels the client is now subscribed to.
+  """
+  def subscribe(client, channel) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      %{channel_to_clients: c2c, client_to_channels: cl2ch} = state
+
+      # Get current channels for client
+      current_channels = Map.get(cl2ch, client, MapSet.new())
+
+      if MapSet.member?(current_channels, channel) do
+        # Already subscribed, return current count without changes
+        {MapSet.size(current_channels), state}
+      else
+        # Add subscription
+        new_client_channels = MapSet.put(current_channels, channel)
+        current_channel_clients = Map.get(c2c, channel, MapSet.new())
+        new_channel_clients = MapSet.put(current_channel_clients, client)
+
+        new_state = %{
+          channel_to_clients: Map.put(c2c, channel, new_channel_clients),
+          client_to_channels: Map.put(cl2ch, client, new_client_channels)
+        }
+
+        {MapSet.size(new_client_channels), new_state}
+      end
+    end)
+  end
+
+  @doc """
+  Unsubscribe a client from a channel.
+  Returns the total number of channels the client is still subscribed to.
+  """
+  def unsubscribe(client, channel) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      %{channel_to_clients: c2c, client_to_channels: cl2ch} = state
+
+      current_channels = Map.get(cl2ch, client, MapSet.new())
+
+      if MapSet.member?(current_channels, channel) do
+        # Remove subscription
+        new_client_channels = MapSet.delete(current_channels, channel)
+        current_channel_clients = Map.get(c2c, channel, MapSet.new())
+        new_channel_clients = MapSet.delete(current_channel_clients, client)
+
+        # Clean up empty mappings
+        new_c2c =
+          if MapSet.size(new_channel_clients) == 0 do
+            Map.delete(c2c, channel)
+          else
+            Map.put(c2c, channel, new_channel_clients)
+          end
+
+        new_cl2ch =
+          if MapSet.size(new_client_channels) == 0 do
+            Map.delete(cl2ch, client)
+          else
+            Map.put(cl2ch, client, new_client_channels)
+          end
+
+        new_state = %{
+          channel_to_clients: new_c2c,
+          client_to_channels: new_cl2ch
+        }
+
+        {MapSet.size(new_client_channels), new_state}
+      else
+        # Not subscribed to this channel
+        {MapSet.size(current_channels), state}
+      end
+    end)
+  end
+
+  @doc """
+  Get the number of clients subscribed to a channel.
+  This is used by the PUBLISH command.
+  """
+  def get_subscriber_count(channel) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state.channel_to_clients, channel) do
+        nil -> 0
+        clients -> MapSet.size(clients)
+      end
+    end)
+  end
+
+  @doc """
+  Get all clients subscribed to a channel.
+  This will be used for message delivery in the next stage.
+  """
+  def get_subscribers(channel) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state.channel_to_clients, channel) do
+        nil -> []
+        clients -> MapSet.to_list(clients)
+      end
+    end)
+  end
+
+  @doc """
+  Get all channels a client is subscribed to.
+  """
+  def get_client_subscriptions(client) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state.client_to_channels, client) do
+        nil -> []
+        channels -> MapSet.to_list(channels)
+      end
+    end)
+  end
+
+  @doc """
+  Check if a client is in subscribed mode (subscribed to at least one channel).
+  """
+  def in_subscribed_mode?(client) do
+    Agent.get(__MODULE__, fn state ->
+      case Map.get(state.client_to_channels, client) do
+        nil -> false
+        channels -> MapSet.size(channels) > 0
+      end
+    end)
+  end
+
+  @doc """
+  Remove all subscriptions for a client (e.g., when client disconnects).
+  """
+  def remove_client(client) do
+    Agent.update(__MODULE__, fn state ->
+      %{channel_to_clients: c2c, client_to_channels: cl2ch} = state
+
+      case Map.get(cl2ch, client) do
+        nil ->
+          state
+
+        client_channels ->
+          # Remove client from all channels they were subscribed to
+          new_c2c =
+            Enum.reduce(client_channels, c2c, fn channel, acc ->
+              case Map.get(acc, channel) do
+                nil ->
+                  acc
+
+                channel_clients ->
+                  new_channel_clients = MapSet.delete(channel_clients, client)
+
+                  if MapSet.size(new_channel_clients) == 0 do
+                    Map.delete(acc, channel)
+                  else
+                    Map.put(acc, channel, new_channel_clients)
+                  end
+              end
+            end)
+
+          # Remove client from client_to_channels mapping
+          new_cl2ch = Map.delete(cl2ch, client)
+
+          %{
+            channel_to_clients: new_c2c,
+            client_to_channels: new_cl2ch
+          }
+      end
+    end)
+  end
+
+  @doc """
+  Publish a message to a channel.
+  Currently just returns the subscriber count, but designed to be easily
+  extended for actual message delivery in the next stage.
+  """
+  def publish(channel, _message) do
+    # For now, just return the subscriber count
+    # In the next stage, this will also deliver the message to all subscribers
+    subscriber_count = get_subscriber_count(channel)
+
+    # TODO: In next stage, add message delivery here
+    # subscribers = get_subscribers(channel)
+    # Enum.each(subscribers, fn client ->
+    #   deliver_message(client, channel, message)
+    # end)
+
+    subscriber_count
+  end
+end
