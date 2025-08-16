@@ -865,7 +865,17 @@ defmodule Server do
   end
 
   defp execute_command("PING", [], client) do
-    write_line("+PONG\r\n", client)
+    if Server.ClientState.in_subscribed_mode?(client) do
+      # In subscribed mode, return RESP array ["pong", ""]
+      # Manually construct RESP array: *2\r\n$4\r\npong\r\n$0\r\n\r\n
+      pong_bulk = "$4\r\npong\r\n"
+      empty_bulk = "$0\r\n\r\n"
+      response = "*2\r\n#{pong_bulk}#{empty_bulk}"
+      write_line(response, client)
+    else
+      # Normal mode, return simple string +PONG\r\n
+      write_line("+PONG\r\n", client)
+    end
   end
 
   defp execute_command("SUBSCRIBE", [channel], client) do
@@ -879,18 +889,6 @@ defmodule Server do
     response = "*3\r\n#{subscribe_bulk}#{channel_bulk}#{count_integer}"
     write_line(response, client)
   end
-
-  # defp execute_command("RPUSH", [key | elements], client) do
-  #   new_len =
-  #     case elements do
-  #       [] -> 0
-  #       [single] -> Server.ListStore.rpush(key, single)
-  #       many -> Server.ListStore.rpush_many(key, many)
-  #     end
-
-  #   maybe_unblock_waiter_for_push(key)
-  #   write_line(":#{new_len}\r\n", client)
-  # end
 
   defp execute_command("RPUSH", [key | elements], client) do
     # RPUSH now asks the ListBlock to handle everything.
