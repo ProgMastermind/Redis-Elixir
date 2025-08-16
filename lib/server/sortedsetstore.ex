@@ -90,6 +90,43 @@ defmodule Server.SortedSetStore do
   end
 
   @doc """
+  Removes a member from a sorted set.
+
+  Returns the number of members removed (0 if member doesn't exist, 1 if removed).
+  If the sorted set becomes empty after removal, it is deleted from the state.
+  """
+  def zrem(key, member) when is_binary(member) do
+    Agent.get_and_update(__MODULE__, fn state ->
+      case Map.get(state, key) do
+        nil ->
+          # Sorted set doesn't exist
+          {0, state}
+
+        %{members: members, sorted_list: sorted_list} ->
+          case Map.get(members, member) do
+            nil ->
+              # Member doesn't exist
+              {0, state}
+
+            _score ->
+              # Member exists, remove it
+              new_members = Map.delete(members, member)
+              new_sorted_list = Enum.reject(sorted_list, fn {m, _s} -> m == member end)
+
+              if map_size(new_members) == 0 do
+                # Sorted set is now empty, remove it completely
+                {1, Map.delete(state, key)}
+              else
+                # Update the sorted set
+                new_zset = %{members: new_members, sorted_list: new_sorted_list}
+                {1, Map.put(state, key, new_zset)}
+              end
+          end
+      end
+    end)
+  end
+
+  @doc """
   Gets the number of members in a sorted set.
   Returns 0 if the key doesn't exist.
   """

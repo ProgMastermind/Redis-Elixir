@@ -1096,6 +1096,11 @@ defmodule Server do
     end
   end
 
+  defp execute_command("ZREM", [key, member], client) do
+    members_removed = Server.SortedSetStore.zrem(key, member)
+    write_line(":#{members_removed}\r\n", client)
+  end
+
   defp execute_command(command, _args, client) do
     write_line("-ERR Unknown command '#{command}'\r\n", client)
   end
